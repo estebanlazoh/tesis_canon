@@ -1,0 +1,4 @@
+*.csv
+Data/ENAHO_*.csv
+Data/Mining_Site*.csv
+Data/*/*.csv
