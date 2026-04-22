@@ -19,9 +19,22 @@ library(janitor)
 rm(list = ls())
 
 getwd()
-setwd("C:/Users/esteb/OneDrive/Documents/Esteban/Berlin/General/MA LA Studien/Masterarbeit/")
+setwd("C:/Users/esteb/OneDrive/Documents/Esteban/Berlin/General/MA LA Studien/Masterarbeit/tesis_canon/")
+
+
+# Funciones de ayuda
+
+normalizar_texto <- function(x) {
+  x %>%
+    as.character() %>%
+    str_squish() %>%
+    str_to_upper() %>%
+    stringi::stri_trans_general("Latin-ASCII") %>%
+    na_if("")
+}
 
 short_years <- sprintf("%02d", 4:24)     # "04" to "24"
+
 full_years <- 2004:2024                 # 2004 to 2024
 
 
@@ -31,34 +44,39 @@ full_years <- 2004:2024                 # 2004 to 2024
 
 ###Transferencias###
 
-Transferencias_Municipales <- read.csv("./Data/Transferencias Canon Minero/Transferencias_Municipales.csv")
-Transferencias_Provinciales <- read.csv("./Data/Transferencias Canon Minero/Transferencias_Provinciales.csv")
-Transferencias_Regionales <- read.csv("./Data/Transferencias Canon Minero/Transferencias_Regionales.csv")
+Transferencias_Municipales <- read_rds("./Data/Transferencias_Municipales.rds")
+Transferencias_Provinciales <- read_rds("./Data/Transferencias_Provinciales.rds")
+Transferencias_Regionales <- read_rds("./Data/Transferencias_Regionales.rds")
 
 ###ENAHO###
 
-ENAHO_100 <- read_rds("./Data/ENAHO/ENAHO_100.rds")
-ENAHO_200 <- read_rds("./Data/ENAHO/ENAHO_200.rds")
-ENAHO_300 <- read_rds("./Data/ENAHO/ENAHO_300.rds")
-ENAHO_500 <- read_rds("./Data/ENAHO/ENAHO_500.rds")
-ENAHO_sumaria <- read_rds("./Data/ENAHO/ENAHO_sumaria.rds")
+ENAHO_100 <- read_rds("./Data/ENAHO_100.rds")
+ENAHO_200 <- read_rds("./Data/ENAHO_200.rds")
+ENAHO_300 <- read_rds("./Data/ENAHO_300.rds")
+ENAHO_500 <- read_rds("./Data/ENAHO_500.rds")
+ENAHO_sumaria <- read_rds("./Data/ENAHO_sumaria.rds")
 
 ###Exchange rate USD-PEN###
 
-EX <- read_rds("./Data/Exchange Rate PEN-USD/EX.rds")
+EX <- read_rds("./Data/EX.rds")
 
 ### Mapas ###
 
-Mapa_Provincia <- read_rds("./Data/Ubigeo/Mapa_Provincia.rds")
-Mapa_Distrito <- read_rds("./Data/Ubigeo/Mapa_Distrito.rds")
-Mapa_Region <- read_rds("./Data/Ubigeo/Mapa_Region.rds")
+Mapa_Provincia <- read_rds("./Data/Mapa_Provincia.rds")
+Mapa_Distrito <- read_rds("./Data/Mapa_Distrito.rds")
+Mapa_Region <- read_rds("./Data/Mapa_Region.rds")
 
 
-Ubigeo_region <- read_rds("./Data/Ubigeo/ubigeo_departamento.rds")
-Ubigeo_provincia <- read_rds("./Data/Ubigeo/ubigeo_provincia.rds")
-Ubigeo_distrito <- read_rds("./Data/Ubigeo/ubigeo_distrito.rds")
+Ubigeo_Region <- read_rds("./Data/ubigeo_departamento.rds")
+Ubigeo_Provincia <- read_rds("./Data/ubigeo_provincia.rds")
+Ubigeo_Distrito <- read_rds("./Data/ubigeo_distrito.rds")
 
-### Mining Site ###
+### Mining Site with Prices ###
 
-Mining_Site_path <- "./Data/Mining Site/Produccion Minera MEF"
-Mining_Site_distrito <- read_xlsx(file.path(Mining_Site_path, "./Mining_Site_distrito.rds"))
+Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
+
+
+###############################
+###       Join Data         ###
+###############################
+
