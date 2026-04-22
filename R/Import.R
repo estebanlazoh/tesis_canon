@@ -369,14 +369,17 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
   select(-province_exists)
 
 ###Export data###
-write.csv(Transferencias_Municipales, "./Data/Transferencias Canon Minero/Transferencias_Municipales.csv",
+write.csv(Transferencias_Municipales, "./tesis_canon/Data/Transferencias_Municipales.csv",
           row.names = FALSE)
+saveRDS(Transferencias_Municipales,  "./tesis_canon/Data/Transferencias_Municipales.rds")
 
-write.csv(Transferencias_Provinciales, "./Data/Transferencias Canon Minero/Transferencias_Provinciales.csv",
+write.csv(Transferencias_Provinciales, "./tesis_canon/Data/Transferencias_Provinciales.csv",
           row.names = FALSE)
+saveRDS(Transferencias_Provinciales,  "./tesis_canon/Data/Transferencias_Provinciales.rds")
 
-write.csv(Transferencias_Regionales, "./Data/Transferencias Canon Minero/Transferencias_Regionales.csv",
+write.csv(Transferencias_Regionales, "./tesis_canon/Data/Transferencias_Regionales.csv",
           row.names = FALSE)
+saveRDS(Transferencias_Regionales,  "./tesis_canon/Data/Transferencias_Regionales.rds")
 
 ###Visualizing###
 
@@ -558,8 +561,8 @@ setdiff(Mapa_Region$REGION_UPPER, Regiones_Mineras) #No existen departamentos qu
 
 #Saving#
 
-saveRDS(Mapa_Region, "./Data/Ubigeo/Mapa_Region.rds")
-write.csv(Mapa_Region, "./Data/Ubigeo/Mapa_Region.cvs", row.names = FALSE)
+saveRDS(Mapa_Region, "./tesis_canon/Data/Mapa_Region.rds")
+write.csv(Mapa_Region, "./tesis_canon/Data/Mapa_Region.csv", row.names = FALSE)
 
 ###Provincial###
 
@@ -628,8 +631,8 @@ setdiff(Mapa_Provincia$PROVINCIA_UPPER, Provincias_Mineras) #No existen provinci
 
 #Saving#
 
-saveRDS(Mapa_Provincia, "./Data/Ubigeo/Mapa_Provincia.rds")
-write.csv(Mapa_Provincia, "./Data/Ubigeo/Mapa_Provincia.cvs", row.names = FALSE)
+saveRDS(Mapa_Provincia, "./tesis_canon/Data/Mapa_Provincia.rds")
+write.csv(Mapa_Provincia, "./tesis_canon/Data/Mapa_Provincia.csv", row.names = FALSE)
 
 ###Distrito###
 
@@ -770,8 +773,8 @@ tibble(
 
 #Saving#
 
-saveRDS(Mapa_Distrito, "./Data/Ubigeo/Mapa_Distrito.rds")
-write.csv(Mapa_Distrito, "./Data/Ubigeo/Mapa_Distrito.cvs", row.names = FALSE)
+saveRDS(Mapa_Distrito, "./tesis_canon/Data/Mapa_Distrito.rds")
+write.csv(Mapa_Distrito, "./tesis_canon/Data/Mapa_Distrito.csv", row.names = FALSE)
 
 
 ######################### ENAHO #########################
@@ -964,8 +967,8 @@ ENAHO_100 <- ENAHO_100 %>%
   select(-nbi5) #Existen periodos en los que NBI se escribe con minúscula o mayúscula
 
 
-saveRDS(ENAHO_100, "./Data/ENAHO/ENAHO_100.rds")
-write.csv(ENAHO_100, "./Data/ENAHO/ENAHO_100.csv", row.names = FALSE)
+saveRDS(ENAHO_100, "./tesis_canon/Data/ENAHO_100.rds")
+write.csv(ENAHO_100, "./tesis_canon/Data/ENAHO_100.csv", row.names = FALSE)
 
 
 ################
@@ -1028,8 +1031,8 @@ ENAHO_200 <- imap_dfr(
   ~ extraer_modulo_200(year_name = .y, year_list = .x, vars_keep = vars_200)
 ) #Para años a partir del 2018 la variable de migración (P208A1) no está disponible
 
-saveRDS(ENAHO_200, "./Data/ENAHO/ENAHO_200.rds")
-write.csv(ENAHO_200, "./Data/ENAHO/ENAHO_200.csv", row.names = FALSE)
+saveRDS(ENAHO_200, "./tesis_canon/Data/ENAHO_200.rds")
+write.csv(ENAHO_200, "./tesis_canon/Data/ENAHO_200.csv", row.names = FALSE)
 
 
 ################
@@ -1117,8 +1120,8 @@ ENAHO_300 <- ENAHO_300 %>%
   select(-T313A)
 
 
-saveRDS(ENAHO_300, "./Data/ENAHO/ENAHO_300.rds")
-write.csv(ENAHO_300, "./Data/ENAHO/ENAHO_300.csv", row.names = FALSE)
+saveRDS(ENAHO_300, "./tesis_canon/Data/ENAHO_300.rds")
+write.csv(ENAHO_300, "./tesis_canon/Data/ENAHO_300.csv", row.names = FALSE)
 
 ################
 ## Module 500 ##
@@ -1232,8 +1235,8 @@ ENAHO_500 <- ENAHO_500 %>%
   select(-P510A1)
 
 
-saveRDS(ENAHO_500, "./Data/ENAHO/ENAHO_500.rds")
-write.csv(ENAHO_500, "./Data/ENAHO/ENAHO_500.csv", row.names = FALSE)
+saveRDS(ENAHO_500, "./tesis_canon/Data/ENAHO_500.rds")
+write.csv(ENAHO_500, "./tesis_canon/Data/ENAHO_500.csv", row.names = FALSE)
 
 #############
 ## Sumaria ##
@@ -1357,8 +1360,8 @@ ENAHO_sumaria <- imap_dfr(
 )
 
 
-saveRDS(ENAHO_sumaria, "./Data/ENAHO/ENAHO_sumaria.rds")
-write.csv(ENAHO_sumaria, "./Data/ENAHO/ENAHO_sumaria.csv", row.names = FALSE)
+saveRDS(ENAHO_sumaria, "./tesis_canon/Data/ENAHO_sumaria.rds")
+write.csv(ENAHO_sumaria, "./tesis_canon/Data/ENAHO_sumaria.csv", row.names = FALSE)
 
 
 ###################### Tipo de cambio ######################
@@ -1370,7 +1373,7 @@ names(EX)[2]<-paste("Tipo de cambio")
 
 EX <- EX[-c(1:3), ]
 
-saveRDS(EX, "./Data/Exchange Rate PEN-USD/EX.rds")
+saveRDS(EX, "./tesis_canon/Data/EX.rds")
 
 
 ###################### Mining Site ######################
@@ -1853,11 +1856,11 @@ Transferencias_Municipales %>%
 # Meses y Totales #
 
 meses <- c(
-  "JANUAR","FEBRUAR","MARZ","APRIL","MAI","JUNI",
-  "JULI","AUGUST","SEPTEMBER","OKTOBER","NOVEMBER","DEZEMBER"
+  "JAN","FEB","MAR","APR","MAY","JUN",
+  "JUL","AUG","SEP","OCT","NOV","DEC"
 )
 
-total_col <- "TOTAL GENERAL"
+total_col <- "TOTAL"
 
 Mining_Site <- Mining_Site %>%
   mutate(
@@ -1868,29 +1871,10 @@ Mining_Site <- Mining_Site %>%
 
 Mining_Site <- Mining_Site %>%
   mutate(
-    TOTAL = rowSums(select(., JANUAR:DEZEMBER), na.rm = TRUE)
+    TOTAL = rowSums(select(., JAN:DEC), na.rm = TRUE)
   )
 
-summary(Mining_Site$`TOTAL GENERAL` - Mining_Site$TOTAL)
-
-
-Mining_Site <- Mining_Site %>% 
-  select(-`TOTAL GENERAL`)
-
-names(Mining_Site) <- names(Mining_Site) %>%
-  recode(
-    "JANUAR" = "JAN",
-    "FEBRUAR" = "FEB",
-    "MARZ" = "MAR",
-    "APRIL" = "APR",
-    "MAI" = "MAY",
-    "JUNI" = "JUN",
-    "JULI" = "JUL",
-    "AUGUST" = "AUG",
-    "SEPTEMBER" = "SEP",
-    "OKTOBER" = "OCT",
-    "NOVEMBER" = "NOV",
-    "DEZEMBER" = "DEC")
+summary(Mining_Site$`TOTAL` - Mining_Site$TOTAL)
 
 
 Mining_Site_long <- Mining_Site %>%
@@ -1916,18 +1900,16 @@ Mining_Site_distrito <- Mining_Site_long %>%
   )
 
 
-
-
 # Saving #
 
-saveRDS(Mining_Site, file.path(Mining_Site_path,"./Mining_Site.rds"))
-write.csv(Mining_Site, file.path(Mining_Site_path,"./Mining_Site.cvs"), row.names = FALSE)
+saveRDS(Mining_Site, "./tesis_canon/Data/Mining_Site.rds")
+write.csv(Mining_Site, "./tesis_canon/Data/Mining_Site.csv", row.names = FALSE)
 
-saveRDS(Mining_Site_long, file.path(Mining_Site_path,"./Mining_Site_long.rds"))
-write.csv(Mining_Site_long, file.path(Mining_Site_path,"./Mining_Site_long.cvs"), row.names = FALSE)
+saveRDS(Mining_Site_long, "./tesis_canon/Data/Mining_Site_long.rds")
+write.csv(Mining_Site_long, "./tesis_canon/Data//Mining_Site_long.csv", row.names = FALSE)
 
-saveRDS(Mining_Site_distrito, file.path(Mining_Site_path,"./Mining_Site_distrito.rds"))
-write.csv(Mining_Site_distrito, file.path(Mining_Site_path,"./Mining_Site_distrito.cvs"), row.names = FALSE)
+saveRDS(Mining_Site_distrito, "./tesis_canon/Data/Mining_Site_distrito.rds")
+write.csv(Mining_Site_distrito, "./tesis_canon/Data/Mining_Site_distrito.csv", row.names = FALSE)
 
 
 
@@ -1937,31 +1919,267 @@ write.csv(Mining_Site_distrito, file.path(Mining_Site_path,"./Mining_Site_distri
 
 Prices_path <- "./Data/Commodity Prices"
 
-Molybdenum <- read_csv(file.path(Prices_path, "./dataset_2026-04-17T09_51_14.139456426Z_DEFAULT_INTEGRATION_IMF.RES_PCPS_9.0.0.csv"))
+All_Prices <- read_xlsx(
+  file.path(Prices_path, "CMO-Historical-Data-Annual.xlsx"),
+  sheet = "Annual Prices (Real)",
+  skip = 5   # <- clave
+) # Valores reales en 2010 US dollars
+
+Molybdenum <- read_csv(file.path(Prices_path, "./IMF Data Molybdenum Commodity Price.csv"))
+
+
+# Cleaning — All_Prices #
+
+All_Prices <- All_Prices %>%
+  clean_names() %>%
+  rename(year = 1)
+
+units_row <- All_Prices %>%
+  slice(1)
+
+All_Prices <- All_Prices %>%
+  slice(-1) %>%
+  mutate(year = as.numeric(year)) %>%
+  filter(year >= 2004, year <= 2024)
+
+df_minerals <- All_Prices %>%
+  select(
+    year,
+    copper,
+    tin,
+    iron_ore_cfr_spot,
+    gold,
+    silver,
+    lead,
+    zinc
+  )
+
+units_minerals <- units_row %>%
+  select(
+    year,
+    copper,
+    tin,
+    iron_ore_cfr_spot,
+    gold,
+    silver,
+    lead,
+    zinc
+  ) %>%
+  pivot_longer(
+    -year,
+    names_to = "mineral",
+    values_to = "unit"
+  ) %>%
+  select(-year)
+
+All_Prices_long <- df_minerals %>%
+  pivot_longer(
+    -year,
+    names_to = "mineral",
+    values_to = "price"
+  ) %>%
+  left_join(units_minerals, by = "mineral")
+
+All_Prices_long <- All_Prices_long %>%
+  mutate(
+    mineral = recode(
+      mineral,
+      copper = "Cobre",
+      tin = "Estano",
+      iron_ore_cfr_spot = "Hierro",
+      gold = "Oro",
+      silver = "Plata",
+      lead = "Plomo",
+      zinc = "Zinc"
+    )
+  )
+
+Mining_Site_long <- Mining_Site_long %>%
+  mutate(
+    mineral = stringr::str_to_title(normalizar_texto(LEY))
+  ) %>%
+  select(-LEY)
+
+
+# Cleaning — Molybdenum #
+
+Molybdenum_long <- Molybdenum %>%
+  filter(DATA_TRANSFORMATION == "US dollars") %>%
+  pivot_longer(
+    cols = matches("^[0-9]{4}$"),
+    names_to = "year",
+    values_to = "price"
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    price = as.numeric(price)
+  ) %>%
+  filter(year >= 2004, year <= 2024) %>%
+  transmute(
+    year,
+    mineral = "Molibdeno",
+    price,
+    unit = "$/mt"
+  )
+
+
+Molybdenum_growth <- Molybdenum %>%
+  filter(SERIES_CODE == "G001.PLMMODY.INDEX_PCHY.A") %>%
+  pivot_longer(
+    cols = matches("^[0-9]{4}$"),
+    names_to = "year",
+    values_to = "growth_yoy"
+  ) %>%
+  mutate(
+    year = as.integer(year),
+    growth_yoy = as.numeric(growth_yoy)
+  ) %>%
+  filter(year >= 2004, year <= 2024) %>%
+  select(year, growth_yoy)
+
+
+Molybdenum_long <- Molybdenum_long %>%
+  left_join(Molybdenum_growth, by = "year") %>%
+  arrange(year)
+
+Molybdenum_long <- Molybdenum_long %>%
+  mutate(
+    price_observed = price,
+    price_imputed = price_observed
+  )
+
+anchor_year <- 2011
+
+stopifnot(
+  sum(Molybdenum_long$year == anchor_year & !is.na(Molybdenum_long$price_observed)) == 1
+)
+
+for (y in seq(anchor_year - 1, 2004, by = -1)) {
+  
+  price_next <- Molybdenum_long %>%
+    filter(year == y + 1) %>%
+    pull(price_imputed)
+  
+  growth_next <- Molybdenum_long %>%
+    filter(year == y + 1) %>%
+    pull(growth_yoy)
+  
+  if (length(price_next) != 1 || is.na(price_next)) {
+    stop(paste("No valid price found for year", y + 1))
+  }
+  
+  if (length(growth_next) != 1 || is.na(growth_next)) {
+    stop(paste("No valid growth rate found for year", y + 1))
+  }
+  
+  Molybdenum_long <- Molybdenum_long %>%
+    mutate(
+      price_imputed = if_else(
+        year == y,
+        price_next / (1 + growth_next / 100),
+        price_imputed
+      )
+    )
+}
+
+
+Molybdenum_long <- Molybdenum_long %>%
+  mutate(
+    price = coalesce(price_observed, price_imputed),
+    price_source = case_when(
+      !is.na(price_observed) ~ "observed_IMF",
+      is.na(price_observed) & !is.na(price_imputed) ~ "backcast_from_yoy_growth",
+      TRUE ~ "missing"
+    )
+  )
+
+
+Molybdenum_long <- Molybdenum_long %>%
+  select(year, mineral, price, unit, price_source, growth_yoy) %>%
+  arrange(year)
+
+# Saving Molybdenum #
+
+write.csv(Molybdenum_long, "./tesis_canon/Data/Molybdenum_long.csv", row.names = FALSE)
+saveRDS(Molybdenum_long, "./tesis_canon/Data/Molybdenum_long.rds")
+
+write.csv(Molybdenum, "./tesis_canon/Data/Molybdenum.csv", row.names = FALSE)
+saveRDS(Molybdenum, "./tesis_canon/Data/Molybdenum.rds")
+
+
+# Join All_Prices and Molybdenum #
+
+All_Prices_long <- All_Prices_long %>%
+  mutate(mineral = normalizar_texto(mineral))
+
+df <- Molybdenum_long %>%
+  select(year, mineral, price, unit)
+
+All_Prices_long <- All_Prices_long %>%
+  mutate(price = as.numeric(price))
+
+All_Prices_long <- bind_rows(
+  All_Prices_long,
+  df
+)
+
+All_Prices_long <- All_Prices_long %>%
+  mutate(
+    unit = stringr::str_remove_all(unit, "[()]")
+  )
+
+All_Prices_long <- All_Prices_long %>%
+  mutate(
+    unit = case_when(
+      unit == "$/troy oz" ~ "$/oz",
+      TRUE ~ unit
+    )
+  )
+
+
+# Saving All_Prices with Molibdenum #
+
+write.csv(All_Prices_long, "./tesis_canon/Data/All_Prices_long.csv", row.names = FALSE)
+saveRDS(All_Prices_long, "./tesis_canon/Data/All_Prices_long.rds")
 
 
 
-# Cleaning #
+################ Join Mining_Site_long with All_Prices_long ################
+
+Mining_Site_long <- Mining_Site_long %>%
+  mutate(year = as.numeric(ANO))
+
+Mining_Site_long <- Mining_Site_long %>%
+  left_join(
+    All_Prices_long %>% select(year, mineral, price, unit),
+    by = c("year", "mineral")
+  )
+
+# Conversion factors: PRODUCCION units → price-compatible units
+#
+#   MEDIDA   unit     factor               mineral(es)
+#   TMF    + $/mt   → 1                   Cobre, Estaño, Molibdeno, Plomo, Zinc
+#   Grs.f  + $/oz   → 1 / 31.1034768     Oro  (grams → troy oz)
+#   Kg.f   + $/oz   → 1000 / 31.1034768  Plata (kg → troy oz)
+#   TMF    + $/dmtu → NA                  Hierro (no consistent conversion)
+
+Mining_Site_long <- Mining_Site_long %>%
+  mutate(
+    conversion_factor = case_when(
+      MEDIDA == "TMF"   & unit == "$/mt"   ~ 1,
+      MEDIDA == "Grs.f" & unit == "$/oz"   ~ 1 / 31.1034768,
+      MEDIDA == "Kg.f"  & unit == "$/oz"   ~ 1000 / 31.1034768,
+      MEDIDA == "TMF"   & unit == "$/dmtu" ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    revenue_usd = PRODUCCION * conversion_factor * price
+  )
 
 
+# Saving Mining_Site_long with prices #
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+saveRDS(Mining_Site_long, "./tesis_canon/Data/Mining_Site_long.rds")
+write.csv(Mining_Site_long, "./tesis_canon/Data/Mining_Site_long.csv", row.names = FALSE)
 
 
 
