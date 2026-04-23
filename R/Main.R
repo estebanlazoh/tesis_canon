@@ -84,6 +84,169 @@ Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
 ###       Join Data         ###
 ###############################
 
+### Helpers ###
+
+Ubigeo_Master <- Mapa_Distrito %>%
+  st_drop_geometry() %>%
+  transmute(
+    ubigeo6          = pad6(COD_DISTRITO),
+    cod_provincia    = pad6(COD_PROVINCIA),
+    cod_region       = pad6(COD_REGION),
+    region_std       = normalizar_texto(REGION),
+    departamento_std = normalizar_texto(DEPARTAMENTO),
+    provincia_std    = normalizar_texto(PROVINCIA),
+    distrito_std     = normalizar_texto(DISTRITO)
+  ) %>%
+  distinct()
+
+
+qa_master <- tibble(
+  n_rows      = nrow(Ubigeo_Master),
+  n_unique    = n_distinct(Ubigeo_Master$ubigeo6),
+  n_dup       = sum(duplicated(Ubigeo_Master$ubigeo6)),
+  n_bad_len   = sum(nchar(Ubigeo_Master$ubigeo6) != 6),
+  n_na_ubigeo = sum(is.na(Ubigeo_Master$ubigeo6))
+)
+
+print(qa_master)
+stopifnot(qa_master$n_dup == 0, qa_master$n_bad_len == 0)
+
+
+### Match Transferencias con Ubigeo ###
+
+Transferencias_Municipales <- Transferencias_Municipales %>%
+  group_by(year) %>%
+  tidyr::fill(province, .direction = "down") %>%
+  ungroup()
+
+transf_base <- Transferencias_Municipales %>%
+  mutate(row_id = row_number()) %>%
+  rename(distrito_raw = name, provincia_raw = province) %>%
+  mutate(
+    distrito_std  = normalizar_texto(distrito_raw),
+    provincia_std = normalizar_texto(provincia_raw),
+    year          = as.integer(year)
+  )
+
+
+transf_match <- transf_base %>%
+  left_join(
+    Ubigeo_Master %>% select(ubigeo6, region_std, provincia_std, distrito_std),
+    by = c("provincia_std", "distrito_std")
+  ) %>%
+  mutate(
+    match_method = if_else(!is.na(ubigeo6), "provincia_distrito", "unmatched")
+  )
+
+
+qa_transf <- transf_match %>%
+  summarise(
+    n_total   = n(),
+    n_match   = sum(match_method != "unmatched"),
+    n_unmatch = sum(match_method == "unmatched"),
+    pct_match = n_match / n_total
+  )
+
+print(qa_transf)
+
+
+# Lista de no matcheados para diccionario manual
+unmatched <- transf_match %>%
+  filter(match_method == "unmatched") %>%
+  distinct(provincia_raw, distrito_raw, provincia_std, distrito_std) %>%
+  arrange(provincia_std, distrito_std)
+
+
+
+# Detecta claves (provincia,distrito) con más de 1 ubigeo
+ambig_master <- Ubigeo_Master %>%
+  count(provincia_std, distrito_std, name = "n_ubigeo") %>%
+  filter(n_ubigeo > 1)
+
+
+master_unique_dist <- Ubigeo_Master %>%
+  count(distrito_std, name = "n_dist") %>%
+  filter(n_dist == 1) %>%
+  select(distrito_std) %>%
+  left_join(Ubigeo_Master, by = "distrito_std") %>%
+  select(distrito_std, provincia_std_true = provincia_std, region_std_true = region_std, ubigeo6_true = ubigeo6)
+
+# para unmatched: reasignar provincia si el distrito es único en Perú
+unmatched_fix1 <- unmatched %>%
+  left_join(master_unique_dist, by = "distrito_std") %>%
+  mutate(
+    provincia_std_fix = coalesce(provincia_std_true, provincia_std),
+    rule = if_else(!is.na(provincia_std_true), "unique_district_imputation", "no_fix")
+  )
+
+unmatched <- unmatched_fix1 %>% 
+  filter(rule == "no_fix")
+
+
+unmatched %>% count(provincia_std, sort = TRUE)
+unmatched %>% count(distrito_std, sort = TRUE)
+
+prov_catalog <- Ubigeo_Master %>% distinct(provincia_std)
+
+transf_rebuild <- Transferencias_Municipales %>%
+  mutate(row_id = row_number(),
+         year   = as.integer(year),
+         distrito_std_raw = normalizar_texto(name),
+         provincia_std_raw = normalizar_texto(province)) %>%
+  group_by(year) %>%
+  mutate(
+    # fila ancla: cuando el "distrito" realmente es una provincia
+    prov_anchor = if_else(distrito_std_raw %in% prov_catalog$provincia_std,
+                          distrito_std_raw, NA_character_),
+    prov_anchor = tidyr::fill(tibble(prov_anchor), prov_anchor, .direction = "down")$prov_anchor,
+    provincia_std_fix = coalesce(provincia_std_raw, prov_anchor)
+  ) %>%
+  ungroup()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Mapa_Distrito es la fuente principal: tiene COD_DISTRITO (ubigeo6 INEI),
 # geometría y es la misma fuente usada en Import.R para los mapas.
 # Las covariables time-invariant se unen desde Ubigeo_Distrito por código.
@@ -128,6 +291,7 @@ qa_master <- tibble(
                           is.na(Ubigeo_Master$ubigeo6)),
   n_sin_covars    = sum(Ubigeo_Master$flag_sin_covars)
 )
+
 print(qa_master)
 
 # Documentar distritos del catálogo sin shapefile (excluidos del master)

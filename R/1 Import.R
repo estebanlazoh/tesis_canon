@@ -235,7 +235,7 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
     name = str_remove(name, "^MUNICIPALIDAD DISTRITAL "),
     name = str_remove(name, "^ DE "),
     name = str_remove(name, "^ "),
-    name = str_remove(name, "\\s*-.*")
+    name = str_remove(name, "^.*-\\s*")
   )
 
 ###Validación nombres de provincias en distritos que recibieron transferencia###
@@ -354,6 +354,16 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
     province == "HUACHO" ~ "HUAURA",
     province == "SAN JOSE DE SISA" ~ "EL DORADO",
     province == "CALLAO" ~ "PROV. CONST. DEL CALLAO",
+    province == "NAZCA" ~ "NASCA",
+    province == "CAÑETE" ~ "CANETE",
+    province == "SANCHEZ CERRO" ~ "GENERAL SANCHEZ CERRO",
+    province == "DANIEL CARRION" ~ "DANIEL ALCIDES CARRION",
+    province == "CUZCO" ~ "CUSCO",
+    province == "QUISPICANCHIS" ~ "QUISPICANCHI",
+    province == "MARAÑON" ~ "MARANON",
+    province == "FERREÑAFE" ~ "FERRENAFE",
+    province == "DANIEL A. CARRION" ~ "DANIEL ALCIDES CARRION",
+    province == "DATEM DEL MARAÑON" ~ "DATEM DEL MARANON",
     TRUE ~ province
   ))
 
