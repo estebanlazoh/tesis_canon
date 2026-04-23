@@ -205,9 +205,93 @@ transf_rebuild <- Transferencias_Municipales %>%
 
 
 
+########################
 
+# 0) base
+tm <- Transferencias_Municipales %>%
+  mutate(
+    code = as.character(code),
+    year = as.integer(year),
+    distrito_std  = normalizar_texto(name),
+    provincia_std = normalizar_texto(province)
+  )
 
+# 1) match fuerte inicial
+m1 <- tm %>%
+  left_join(
+    Ubigeo_Master %>% select(ubigeo6, provincia_std, distrito_std, region_std),
+    by = c("provincia_std", "distrito_std")
+  ) %>%
+  mutate(
+    match_strong = !is.na(ubigeo6)
+  )
 
+# 2) fallback por distrito único (nacional)
+dist_unique <- Ubigeo_Master %>%
+  count(distrito_std, name = "n_dist") %>%
+  filter(n_dist == 1) %>%
+  select(distrito_std) %>%
+  left_join(Ubigeo_Master %>% select(ubigeo6, distrito_std), by = "distrito_std")
+
+m2 <- m1 %>%
+  left_join(dist_unique %>% rename(ubigeo6_unique = ubigeo6), by = "distrito_std") %>%
+  mutate(
+    ubigeo6_seed = coalesce(ubigeo6, ubigeo6_unique),
+    seed_method = case_when(
+      !is.na(ubigeo6) ~ "prov_distr",
+      is.na(ubigeo6) & !is.na(ubigeo6_unique) ~ "district_unique",
+      TRUE ~ "none"
+    )
+  )
+
+# 3) crosswalk code->ubigeo6 desde seeds confiables
+code_xwalk <- m2 %>%
+  filter(!is.na(ubigeo6_seed)) %>%
+  group_by(code, ubigeo6_seed) %>%
+  summarise(
+    n_rows = n(),
+    n_years = n_distinct(year),
+    monto = sum(credited, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(code) %>%
+  arrange(desc(n_years), desc(monto), .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  transmute(code, ubigeo6_code = ubigeo6_seed)
+
+# 4) aplicar crosswalk por code
+m3 <- m2 %>%
+  left_join(code_xwalk, by = "code") %>%
+  mutate(
+    ubigeo6_final = coalesce(ubigeo6_seed, ubigeo6_code),
+    match_method_final = case_when(
+      !is.na(ubigeo6) ~ "prov_distr",
+      is.na(ubigeo6) & !is.na(ubigeo6_unique) ~ "district_unique",
+      is.na(ubigeo6_seed) & !is.na(ubigeo6_code) ~ "code_mode",
+      TRUE ~ "unmatched"
+    )
+  )
+
+# 5) QA final
+qa_final <- m3 %>%
+  summarise(
+    n_total = n(),
+    n_match = sum(match_method_final != "unmatched"),
+    n_unmatch = sum(match_method_final == "unmatched"),
+    pct_match_rows = n_match / n_total,
+    pct_match_credited = sum(credited[match_method_final != "unmatched"], na.rm=TRUE) / sum(credited, na.rm=TRUE)
+  )
+print(qa_final)
+
+# 6) coherencia: cada code debería mapear a 1 ubigeo
+qa_code_multi <- m3 %>%
+  filter(!is.na(ubigeo6_final)) %>%
+  distinct(code, ubigeo6_final) %>%
+  count(code, name = "n_ubigeo") %>%
+  filter(n_ubigeo > 1)
+
+print(qa_code_multi, n = 100)
 
 
 
