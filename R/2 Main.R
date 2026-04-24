@@ -84,218 +84,201 @@ Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
 ###       Join Data         ###
 ###############################
 
-### Helpers ###
+# ---- Ubigeo Master ----
 
 Ubigeo_Master <- Mapa_Distrito %>%
   st_drop_geometry() %>%
   transmute(
-    ubigeo6          = pad6(COD_DISTRITO),
-    cod_provincia    = pad6(COD_PROVINCIA),
-    cod_region       = pad6(COD_REGION),
-    region_std       = normalizar_texto(REGION),
-    departamento_std = normalizar_texto(DEPARTAMENTO),
-    provincia_std    = normalizar_texto(PROVINCIA),
-    distrito_std     = normalizar_texto(DISTRITO)
+    ubigeo6      = pad6(COD_DISTRITO),
+    cod_provincia = pad6(COD_PROVINCIA),
+    cod_region    = pad6(COD_REGION),
+    region_std    = normalizar_texto(REGION),
+    depto_std     = normalizar_texto(DEPARTAMENTO),
+    provincia_std = normalizar_texto(PROVINCIA),
+    distrito_std  = normalizar_texto(DISTRITO)
   ) %>%
   distinct()
 
-
-qa_master <- tibble(
-  n_rows      = nrow(Ubigeo_Master),
-  n_unique    = n_distinct(Ubigeo_Master$ubigeo6),
-  n_dup       = sum(duplicated(Ubigeo_Master$ubigeo6)),
-  n_bad_len   = sum(nchar(Ubigeo_Master$ubigeo6) != 6),
-  n_na_ubigeo = sum(is.na(Ubigeo_Master$ubigeo6))
+stopifnot(
+  sum(duplicated(Ubigeo_Master$ubigeo6)) == 0,
+  sum(nchar(Ubigeo_Master$ubigeo6) != 6) == 0
 )
 
-print(qa_master)
-stopifnot(qa_master$n_dup == 0, qa_master$n_bad_len == 0)
 
+# ==============================================================================
+# ---- Transferencias Municipales: match en 3 pasos ----------------------------
+# ==============================================================================
 
-### Match Transferencias con Ubigeo ###
+# ---- Paso 0 — alias y pares manuales (sin cambios) --------------------------
 
-Transferencias_Municipales <- Transferencias_Municipales %>%
-  group_by(year) %>%
-  tidyr::fill(province, .direction = "down") %>%
-  ungroup()
+prov_alias <- c(
+  "CUZCO"             = "CUSCO",
+  "DANIEL CARRION"    = "DANIEL ALCIDES CARRION",
+  "DANIEL A. CARRION" = "DANIEL ALCIDES CARRION",
+  "QUISPICANCHIS"     = "QUISPICANCHI",
+  "NAZCA"             = "NASCA",
+  "SANCHEZ CERRO"     = "GENERAL SANCHEZ CERRO"
+)
+
+manual_pairs <- tribble(
+  ~provincia_from,     ~distrito_from,   ~provincia_to,      ~distrito_to,
+  "PUTUMAYO",          "SAN ANTONIO",    "MARISCAL NIETO",   "SAN ANTONIO",
+  "HUARAZ",            "PAMPAS",         "HUARAZ",           "PAMPAS GRANDE",
+  "PUTUMAYO",          "SAN MIGUEL",     "SAN ROMAN",        "SAN MIGUEL",
+  "ZARUMILLA",         "SAN MIGUEL",     "SAN ROMAN",        "SAN MIGUEL",
+  "PUTUMAYO",          "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
+  "TARATA",            "PAMPAS",         "HUARAZ",           "PAMPAS",
+  "PUTUMAYO",          "NINABAMBA",      "LA MAR",           "NINABAMBA",
+  "HUANUCO",           "QUISQUI",        "HUANUCO",          "QUISQUI (KICHKI)",
+  "ZARUMILLA",         "PUEBLO NUEVO",   "LEONCIO PRADO",    "PUEBLO NUEVO",
+  "ZARUMILLA",         "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
+  "PUTUMAYO",          "COCHABAMBA",     "TAYACAJA",         "COCHABAMBA",
+  "PUTUMAYO",          "PUEBLO NUEVO",   "LEONCIO PRADO",    "PUEBLO NUEVO",
+  "PUTUMAYO",          "SANTA LUCIA",    "TOCACHE",          "SANTA LUCIA",
+  "TARATA",            "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
+  "TARATA",            "QUISQUI",        "TARATA",           "QUISQUI (KICHKI)",
+  "PADRE ABAD",        "AGUAYTIA",       "PADRE ABAD",       "PADRE ABAD"
+)
+
+# ---- transf_base -------------------------------------------------------------
 
 transf_base <- Transferencias_Municipales %>%
-  mutate(row_id = row_number()) %>%
   rename(distrito_raw = name, provincia_raw = province) %>%
-  mutate(
-    distrito_std  = normalizar_texto(distrito_raw),
-    provincia_std = normalizar_texto(provincia_raw),
-    year          = as.integer(year)
-  )
-
-
-transf_match <- transf_base %>%
-  left_join(
-    Ubigeo_Master %>% select(ubigeo6, region_std, provincia_std, distrito_std),
-    by = c("provincia_std", "distrito_std")
-  ) %>%
-  mutate(
-    match_method = if_else(!is.na(ubigeo6), "provincia_distrito", "unmatched")
-  )
-
-
-qa_transf <- transf_match %>%
-  summarise(
-    n_total   = n(),
-    n_match   = sum(match_method != "unmatched"),
-    n_unmatch = sum(match_method == "unmatched"),
-    pct_match = n_match / n_total
-  )
-
-print(qa_transf)
-
-
-# Lista de no matcheados para diccionario manual
-unmatched <- transf_match %>%
-  filter(match_method == "unmatched") %>%
-  distinct(provincia_raw, distrito_raw, provincia_std, distrito_std) %>%
-  arrange(provincia_std, distrito_std)
-
-
-
-# Detecta claves (provincia,distrito) con más de 1 ubigeo
-ambig_master <- Ubigeo_Master %>%
-  count(provincia_std, distrito_std, name = "n_ubigeo") %>%
-  filter(n_ubigeo > 1)
-
-
-master_unique_dist <- Ubigeo_Master %>%
-  count(distrito_std, name = "n_dist") %>%
-  filter(n_dist == 1) %>%
-  select(distrito_std) %>%
-  left_join(Ubigeo_Master, by = "distrito_std") %>%
-  select(distrito_std, provincia_std_true = provincia_std, region_std_true = region_std, ubigeo6_true = ubigeo6)
-
-# para unmatched: reasignar provincia si el distrito es único en Perú
-unmatched_fix1 <- unmatched %>%
-  left_join(master_unique_dist, by = "distrito_std") %>%
-  mutate(
-    provincia_std_fix = coalesce(provincia_std_true, provincia_std),
-    rule = if_else(!is.na(provincia_std_true), "unique_district_imputation", "no_fix")
-  )
-
-unmatched <- unmatched_fix1 %>% 
-  filter(rule == "no_fix")
-
-
-unmatched %>% count(provincia_std, sort = TRUE)
-unmatched %>% count(distrito_std, sort = TRUE)
-
-prov_catalog <- Ubigeo_Master %>% distinct(provincia_std)
-
-transf_rebuild <- Transferencias_Municipales %>%
-  mutate(row_id = row_number(),
-         year   = as.integer(year),
-         distrito_std_raw = normalizar_texto(name),
-         provincia_std_raw = normalizar_texto(province)) %>%
-  group_by(year) %>%
-  mutate(
-    # fila ancla: cuando el "distrito" realmente es una provincia
-    prov_anchor = if_else(distrito_std_raw %in% prov_catalog$provincia_std,
-                          distrito_std_raw, NA_character_),
-    prov_anchor = tidyr::fill(tibble(prov_anchor), prov_anchor, .direction = "down")$prov_anchor,
-    provincia_std_fix = coalesce(provincia_std_raw, prov_anchor)
-  ) %>%
-  ungroup()
-
-
-
-########################
-
-# 0) base
-tm <- Transferencias_Municipales %>%
   mutate(
     code = as.character(code),
     year = as.integer(year),
-    distrito_std  = normalizar_texto(name),
-    provincia_std = normalizar_texto(province)
-  )
+    
+    # Paso 0a: correcciones por código municipal — ANTES de normalizar.
+    # Cada código que generaba code→ubigeo no-único se ancla aquí al nombre
+    # oficial, de modo que el pipeline posterior converge a un único ubigeo6.
+    distrito_raw = case_when(
+      code == "01-301371"                  ~ "HUACHO",
+      code == "03-300939"                  ~ "MOLINO",
+      code == "06-300022"                  ~ "BAGUA",
+      code == "07-300292"                  ~ "IHUAYLLO",
+      TRUE                                 ~ distrito_raw
+    ),
+    provincia_raw = case_when(
+      code == "02-301128"                  ~ "TRUJILLO",
+      code == "06-301764" & year == 2015L  ~ "SAN MARTIN",
+      code == "18-301069" & year == 2015L  ~ "JAUJA",
+      TRUE                                 ~ provincia_raw
+    ),
+    
+    # Paso 0b: normalización
+    distrito_std  = normalizar_texto(distrito_raw) %>%
+      str_remove("\\s*\\([^)]+\\)") %>%
+      str_squish(),
+    provincia_std = normalizar_texto(provincia_raw) %>%
+      recode(!!!prov_alias),
+    
+    # Paso 0c: correcciones de nombre estandarizado (capital provincial, typos)
+    distrito_std = case_when(
+      provincia_std == "CARLOS FERMIN FITZCARRALD" &
+        distrito_std == "CARLOS FERMIN FITZCARRALD"  ~ "SAN LUIS",
+      provincia_std == "SAN ANTONIO DE PUTINA"       &
+        distrito_std == "SAN ANTONIO DE PUTINA"      ~ "PUTINA",
+      provincia_std == "HUAMANGA"                    &
+        distrito_std == "HUAMANGA"                   ~ "AYACUCHO",
+      provincia_std == "CONTRALMIRANTE VILLAR"        &
+        distrito_std == "CONTRALMIRANTE VILLAR"      ~ "ZORRITOS",
+      provincia_std == "CORONEL PORTILLO"            &
+        distrito_std == "CORONEL PORTILLO"           ~ "CALLERIA",
+      provincia_std == "DATEM DEL MARANON"           &
+        distrito_std == "DATEM DEL MARANON"          ~ "BARRANCA",
+      provincia_std == "MARISCAL RAMON CASTILLA"     &
+        distrito_std == "MARISCAL RAMON CASTILLA"    ~ "RAMON CASTILLA",
+      distrito_std == "VITARTE"                      ~ "ATE",
+      distrito_std == "AGUAITIA"                     ~ "AGUAYTIA",
+      provincia_std == "LUCANAS" &
+        distrito_std == "HUAS"                       ~ "HUAC HUAS",
+      TRUE                                           ~ distrito_std
+    )
+  ) %>%
+  # Paso 0d: ajustes manuales por par (provincia_std, distrito_std)
+  left_join(
+    manual_pairs,
+    by = c("provincia_std" = "provincia_from",
+           "distrito_std"  = "distrito_from")
+  ) %>%
+  mutate(
+    provincia_std      = coalesce(provincia_to, provincia_std),
+    distrito_std       = coalesce(distrito_to,  distrito_std),
+    manual_fix_applied = !is.na(provincia_to) | !is.na(distrito_to)
+  ) %>%
+  select(-provincia_to, -distrito_to)
 
-# 1) match fuerte inicial
-m1 <- tm %>%
+# ---- Paso 1: match fuerte (provincia, distrito) ------------------------------
+
+m1 <- transf_base %>%
   left_join(
     Ubigeo_Master %>% select(ubigeo6, provincia_std, distrito_std, region_std),
     by = c("provincia_std", "distrito_std")
   ) %>%
-  mutate(
-    match_strong = !is.na(ubigeo6)
-  )
+  mutate(match_method = if_else(!is.na(ubigeo6), "prov_dist", NA_character_))
 
-# 2) fallback por distrito único (nacional)
+# ---- Paso 2: fallback — distrito único en Perú -------------------------------
+
 dist_unique <- Ubigeo_Master %>%
-  count(distrito_std, name = "n_dist") %>%
-  filter(n_dist == 1) %>%
-  select(distrito_std) %>%
-  left_join(Ubigeo_Master %>% select(ubigeo6, distrito_std), by = "distrito_std")
+  count(distrito_std, name = "n") %>%
+  filter(n == 1) %>%
+  left_join(Ubigeo_Master %>% select(ubigeo6, distrito_std), by = "distrito_std") %>%
+  select(distrito_std, ubigeo6_uniq = ubigeo6)
 
 m2 <- m1 %>%
-  left_join(dist_unique %>% rename(ubigeo6_unique = ubigeo6), by = "distrito_std") %>%
+  left_join(dist_unique, by = "distrito_std") %>%
   mutate(
-    ubigeo6_seed = coalesce(ubigeo6, ubigeo6_unique),
-    seed_method = case_when(
-      !is.na(ubigeo6) ~ "prov_distr",
-      is.na(ubigeo6) & !is.na(ubigeo6_unique) ~ "district_unique",
-      TRUE ~ "none"
-    )
-  )
-
-# 3) crosswalk code->ubigeo6 desde seeds confiables
-code_xwalk <- m2 %>%
-  filter(!is.na(ubigeo6_seed)) %>%
-  group_by(code, ubigeo6_seed) %>%
-  summarise(
-    n_rows = n(),
-    n_years = n_distinct(year),
-    monto = sum(credited, na.rm = TRUE),
-    .groups = "drop"
+    ubigeo6      = coalesce(ubigeo6, ubigeo6_uniq),
+    match_method = coalesce(match_method,
+                            if_else(!is.na(ubigeo6_uniq), "dist_unique", NA_character_))
   ) %>%
-  group_by(code) %>%
-  arrange(desc(n_years), desc(monto), .by_group = TRUE) %>%
-  slice(1) %>%
-  ungroup() %>%
-  transmute(code, ubigeo6_code = ubigeo6_seed)
+  select(-ubigeo6_uniq)
 
-# 4) aplicar crosswalk por code
+# ---- Paso 3: crosswalk por code (cubre años con provincia errónea) -----------
+
+code_xwalk <- m2 %>%
+  filter(!is.na(ubigeo6)) %>%
+  count(code, ubigeo6, match_method, name = "n_obs") %>%
+  group_by(code) %>%
+  slice_max(n_obs, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(code, ubigeo6_code = ubigeo6, src_code = match_method)
+
 m3 <- m2 %>%
   left_join(code_xwalk, by = "code") %>%
   mutate(
-    ubigeo6_final = coalesce(ubigeo6_seed, ubigeo6_code),
-    match_method_final = case_when(
-      !is.na(ubigeo6) ~ "prov_distr",
-      is.na(ubigeo6) & !is.na(ubigeo6_unique) ~ "district_unique",
-      is.na(ubigeo6_seed) & !is.na(ubigeo6_code) ~ "code_mode",
-      TRUE ~ "unmatched"
-    )
-  )
+    ubigeo6      = coalesce(ubigeo6, ubigeo6_code),
+    match_method = coalesce(match_method,
+                            if_else(!is.na(ubigeo6_code),
+                                    paste0("code_xwalk[", src_code, "]"),
+                                    "unmatched"))
+  ) %>%
+  select(-ubigeo6_code, -src_code)
 
-# 5) QA final
+# ---- QA ----------------------------------------------------------------------
+
 qa_final <- m3 %>%
   summarise(
-    n_total = n(),
-    n_match = sum(match_method_final != "unmatched"),
-    n_unmatch = sum(match_method_final == "unmatched"),
-    pct_match_rows = n_match / n_total,
-    pct_match_credited = sum(credited[match_method_final != "unmatched"], na.rm=TRUE) / sum(credited, na.rm=TRUE)
+    n_total            = n(),
+    n_match            = sum(match_method != "unmatched"),
+    n_unmatch          = sum(match_method == "unmatched"),
+    pct_match_rows     = n_match / n_total,
+    pct_match_credited = sum(credited[match_method != "unmatched"], na.rm = TRUE) /
+      sum(credited, na.rm = TRUE),
+    n_manual_fix       = sum(manual_fix_applied, na.rm = TRUE)
   )
 print(qa_final)
 
-# 6) coherencia: cada code debería mapear a 1 ubigeo
-qa_code_multi <- m3 %>%
-  filter(!is.na(ubigeo6_final)) %>%
-  distinct(code, ubigeo6_final) %>%
-  count(code, name = "n_ubigeo") %>%
-  filter(n_ubigeo > 1)
+unmatched_transf <- m3 %>%
+  filter(match_method == "unmatched") %>%
+  group_by(provincia_std, distrito_std) %>%
+  summarise(n = n(), credited = sum(credited, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(credited))
+print(unmatched_transf, n = 100)
 
-print(qa_code_multi, n = 100)
-
-
-
-
+# Chequeos de unicidad — deben devolver 0 filas
+m3 %>% distinct(code, ubigeo6) %>% count(code) %>% filter(n > 1)
+m3 %>% count(ubigeo6, year) %>% filter(n > 1)
 
 
 
@@ -320,77 +303,143 @@ print(qa_code_multi, n = 100)
 
 
 
+# ==============================================================================
+# ---- Mining Site Long: match por triple llave --------------------------------
+# ==============================================================================
 
-
-
-
-
-
-
-
-
-
-
-# Mapa_Distrito es la fuente principal: tiene COD_DISTRITO (ubigeo6 INEI),
-# geometría y es la misma fuente usada en Import.R para los mapas.
-# Las covariables time-invariant se unen desde Ubigeo_Distrito por código.
-
-ubigeo_covars <- Ubigeo_Distrito %>%
-  filter(!is.na(inei)) %>%
-  transmute(
-    ubigeo6             = pad6(inei),
-    altitude,
-    latitude,
-    longitude,
-    superficie,
-    pob_densidad_2020,
-    idh_2019            = as.numeric(idh_2019),
-    ivfa                = as.numeric(indice_vulnerabilidad_alimentaria),
-    pct_pobreza_total,
-    pct_pobreza_extrema
-  )
-
-Ubigeo_Master <- Mapa_Distrito %>%
-  st_drop_geometry() %>%
-  transmute(
-    ubigeo6          = pad6(COD_DISTRITO),
-    region_std       = normalizar_texto(REGION),
-    departamento_std = normalizar_texto(DEPARTAMENTO),
-    provincia_std    = normalizar_texto(PROVINCIA),
-    distrito_std     = normalizar_texto(DISTRITO),
-    region_natural   = REGION_NATURAL,
-    source_master    = "Mapa_Distrito"
+# Ubigeo_Master sin paréntesis (para join con Mining donde nombres son más limpios)
+ubigeo_mining <- Ubigeo_Master %>%
+  mutate(
+    distrito_std = str_remove(distrito_std, "\\s*\\([^)]+\\)") %>% str_squish()
   ) %>%
-  left_join(ubigeo_covars, by = "ubigeo6") %>%
-  distinct() %>%
-  mutate(flag_sin_covars = is.na(altitude))
+  distinct(ubigeo6, region_std, provincia_std, distrito_std)
 
-## QA del master ----
+mining_match <- Mining_Site_long %>%
+  mutate(
+    year     = as.integer(ANO),
+    dist_std = normalizar_texto(DISTRITO_STD) %>%
+      str_replace_all("-", " ") %>%
+      str_squish(),
+    prov_std = normalizar_texto(PROVINCIA_STD) %>%
+      recode("NAZCA" = "NASCA"),
+    reg_std  = normalizar_texto(REGION_STD)
+  ) %>%
+  left_join(
+    ubigeo_mining %>% select(ubigeo6, region_std, provincia_std, distrito_std),
+    by = c("reg_std" = "region_std",
+           "prov_std" = "provincia_std",
+           "dist_std" = "distrito_std")
+  ) %>%
+  mutate(match_method = if_else(!is.na(ubigeo6), "triple_key", "unmatched"))
 
-qa_master <- tibble(
-  n_master        = nrow(Ubigeo_Master),
-  n_ubigeo_unique = n_distinct(Ubigeo_Master$ubigeo6),
-  n_dup_ubigeo    = sum(duplicated(Ubigeo_Master$ubigeo6)),
-  n_bad_len       = sum(nchar(Ubigeo_Master$ubigeo6) != 6 |
-                          is.na(Ubigeo_Master$ubigeo6)),
-  n_sin_covars    = sum(Ubigeo_Master$flag_sin_covars)
-)
+# ---- QA Mining ----
 
-print(qa_master)
+qa_mining <- mining_match %>%
+  group_by(match_method) %>%
+  summarise(
+    n_rows      = n(),
+    n_distritos = n_distinct(paste(reg_std, prov_std, dist_std)),
+    revenue     = sum(revenue_usd, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pct_revenue = revenue / sum(revenue, na.rm = TRUE))
 
-# Documentar distritos del catálogo sin shapefile (excluidos del master)
-exclusiones_sin_geometria <- Ubigeo_Distrito %>%
-  filter(!is.na(inei)) %>%
-  mutate(ubigeo6 = pad6(inei)) %>%
-  anti_join(Ubigeo_Master, by = "ubigeo6") %>%
-  select(ubigeo6, departamento, provincia, distrito)
+print(qa_mining)
 
-message("Distritos en catálogo sin shapefile: ", nrow(exclusiones_sin_geometria))
-print(exclusiones_sin_geometria)
+unmatched_mining <- mining_match %>%
+  filter(match_method == "unmatched") %>%
+  group_by(reg_std, prov_std, dist_std) %>%
+  summarise(n = n(), revenue = sum(revenue_usd, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(revenue))
 
-# Gates
-stopifnot(qa_master$n_dup_ubigeo == 0)
-stopifnot(qa_master$n_bad_len    == 0)
+print(unmatched_mining, n = 50)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
