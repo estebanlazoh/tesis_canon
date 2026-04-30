@@ -80,16 +80,16 @@ Ubigeo_Distrito <- read_rds("./Data/ubigeo_distrito.rds")
 Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
 
 
-###############################
-###       Join Data         ###
-###############################
+# ==============================================================================
+# ---- JOIN DATA: Ubigeo matching — Transferencias ----------------------------
+# ==============================================================================
 
-# ---- Ubigeo Master ----
+# ---- Ubigeo_Master (base compartida por los tres matches) -------------------
 
 Ubigeo_Master <- Mapa_Distrito %>%
   st_drop_geometry() %>%
   transmute(
-    ubigeo6      = pad6(COD_DISTRITO),
+    ubigeo6       = pad6(COD_DISTRITO),
     cod_provincia = pad6(COD_PROVINCIA),
     cod_region    = pad6(COD_REGION),
     region_std    = normalizar_texto(REGION),
@@ -101,124 +101,31 @@ Ubigeo_Master <- Mapa_Distrito %>%
 
 stopifnot(
   sum(duplicated(Ubigeo_Master$ubigeo6)) == 0,
-  sum(nchar(Ubigeo_Master$ubigeo6) != 6) == 0
+  sum(nchar(Ubigeo_Master$ubigeo6) != 6)  == 0
 )
-
 
 # ==============================================================================
-# ---- Transferencias Municipales: match en 3 pasos ----------------------------
+# ---- 1. Transferencias_Municipales → ubigeo6 (3 pasos) ----------------------
 # ==============================================================================
 
-# ---- Paso 0 — alias y pares manuales (sin cambios) --------------------------
-
-prov_alias <- c(
-  "CUZCO"             = "CUSCO",
-  "DANIEL CARRION"    = "DANIEL ALCIDES CARRION",
-  "DANIEL A. CARRION" = "DANIEL ALCIDES CARRION",
-  "QUISPICANCHIS"     = "QUISPICANCHI",
-  "NAZCA"             = "NASCA",
-  "SANCHEZ CERRO"     = "GENERAL SANCHEZ CERRO"
-)
-
-manual_pairs <- tribble(
-  ~provincia_from,     ~distrito_from,   ~provincia_to,      ~distrito_to,
-  "PUTUMAYO",          "SAN ANTONIO",    "MARISCAL NIETO",   "SAN ANTONIO",
-  "HUARAZ",            "PAMPAS",         "HUARAZ",           "PAMPAS GRANDE",
-  "PUTUMAYO",          "SAN MIGUEL",     "SAN ROMAN",        "SAN MIGUEL",
-  "ZARUMILLA",         "SAN MIGUEL",     "SAN ROMAN",        "SAN MIGUEL",
-  "PUTUMAYO",          "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
-  "TARATA",            "PAMPAS",         "HUARAZ",           "PAMPAS",
-  "PUTUMAYO",          "NINABAMBA",      "LA MAR",           "NINABAMBA",
-  "HUANUCO",           "QUISQUI",        "HUANUCO",          "QUISQUI (KICHKI)",
-  "ZARUMILLA",         "PUEBLO NUEVO",   "LEONCIO PRADO",    "PUEBLO NUEVO",
-  "ZARUMILLA",         "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
-  "PUTUMAYO",          "COCHABAMBA",     "TAYACAJA",         "COCHABAMBA",
-  "PUTUMAYO",          "PUEBLO NUEVO",   "LEONCIO PRADO",    "PUEBLO NUEVO",
-  "PUTUMAYO",          "SANTA LUCIA",    "TOCACHE",          "SANTA LUCIA",
-  "TARATA",            "EL PORVENIR",    "CHINCHEROS",       "EL PORVENIR",
-  "TARATA",            "QUISQUI",        "TARATA",           "QUISQUI (KICHKI)",
-  "PADRE ABAD",        "AGUAYTIA",       "PADRE ABAD",       "PADRE ABAD"
-)
-
-# ---- transf_base -------------------------------------------------------------
-
-transf_base <- Transferencias_Municipales %>%
-  rename(distrito_raw = name, provincia_raw = province) %>%
+transf_keys <- Transferencias_Municipales %>%
+  select(-any_of(c("ubigeo6", "match_method", "provincia_real", "depto_real"))) %>%
   mutate(
-    code = as.character(code),
-    year = as.integer(year),
-    
-    # Paso 0a: correcciones por código municipal — ANTES de normalizar.
-    # Cada código que generaba code→ubigeo no-único se ancla aquí al nombre
-    # oficial, de modo que el pipeline posterior converge a un único ubigeo6.
-    distrito_raw = case_when(
-      code == "01-301371"                  ~ "HUACHO",
-      code == "03-300939"                  ~ "MOLINO",
-      code == "06-300022"                  ~ "BAGUA",
-      code == "07-300292"                  ~ "IHUAYLLO",
-      TRUE                                 ~ distrito_raw
-    ),
-    provincia_raw = case_when(
-      code == "02-301128"                  ~ "TRUJILLO",
-      code == "06-301764" & year == 2015L  ~ "SAN MARTIN",
-      code == "18-301069" & year == 2015L  ~ "JAUJA",
-      TRUE                                 ~ provincia_raw
-    ),
-    
-    # Paso 0b: normalización
-    distrito_std  = normalizar_texto(distrito_raw) %>%
-      str_remove("\\s*\\([^)]+\\)") %>%
-      str_squish(),
-    provincia_std = normalizar_texto(provincia_raw) %>%
-      recode(!!!prov_alias),
-    
-    # Paso 0c: correcciones de nombre estandarizado (capital provincial, typos)
-    distrito_std = case_when(
-      provincia_std == "CARLOS FERMIN FITZCARRALD" &
-        distrito_std == "CARLOS FERMIN FITZCARRALD"  ~ "SAN LUIS",
-      provincia_std == "SAN ANTONIO DE PUTINA"       &
-        distrito_std == "SAN ANTONIO DE PUTINA"      ~ "PUTINA",
-      provincia_std == "HUAMANGA"                    &
-        distrito_std == "HUAMANGA"                   ~ "AYACUCHO",
-      provincia_std == "CONTRALMIRANTE VILLAR"        &
-        distrito_std == "CONTRALMIRANTE VILLAR"      ~ "ZORRITOS",
-      provincia_std == "CORONEL PORTILLO"            &
-        distrito_std == "CORONEL PORTILLO"           ~ "CALLERIA",
-      provincia_std == "DATEM DEL MARANON"           &
-        distrito_std == "DATEM DEL MARANON"          ~ "BARRANCA",
-      provincia_std == "MARISCAL RAMON CASTILLA"     &
-        distrito_std == "MARISCAL RAMON CASTILLA"    ~ "RAMON CASTILLA",
-      distrito_std == "VITARTE"                      ~ "ATE",
-      distrito_std == "AGUAITIA"                     ~ "AGUAYTIA",
-      provincia_std == "LUCANAS" &
-        distrito_std == "HUAS"                       ~ "HUAC HUAS",
-      TRUE                                           ~ distrito_std
-    )
-  ) %>%
-  # Paso 0d: ajustes manuales por par (provincia_std, distrito_std)
-  left_join(
-    manual_pairs,
-    by = c("provincia_std" = "provincia_from",
-           "distrito_std"  = "distrito_from")
-  ) %>%
-  mutate(
-    provincia_std      = coalesce(provincia_to, provincia_std),
-    distrito_std       = coalesce(distrito_to,  distrito_std),
-    manual_fix_applied = !is.na(provincia_to) | !is.na(distrito_to)
-  ) %>%
-  select(-provincia_to, -distrito_to)
+    code          = as.character(code),
+    year          = as.integer(year),
+    provincia_std = normalizar_texto(province),
+    distrito_std  = normalizar_texto(name)
+  )
 
-# ---- Paso 1: match fuerte (provincia, distrito) ------------------------------
-
-m1 <- transf_base %>%
+# Paso 1 — match fuerte (provincia, distrito)
+m1 <- transf_keys %>%
   left_join(
-    Ubigeo_Master %>% select(ubigeo6, provincia_std, distrito_std, region_std),
+    Ubigeo_Master %>% select(ubigeo6, provincia_std, distrito_std),
     by = c("provincia_std", "distrito_std")
   ) %>%
   mutate(match_method = if_else(!is.na(ubigeo6), "prov_dist", NA_character_))
 
-# ---- Paso 2: fallback — distrito único en Perú -------------------------------
-
+# Paso 2 — distrito único en Perú
 dist_unique <- Ubigeo_Master %>%
   count(distrito_std, name = "n") %>%
   filter(n == 1) %>%
@@ -234,105 +141,273 @@ m2 <- m1 %>%
   ) %>%
   select(-ubigeo6_uniq)
 
-# ---- Paso 3: crosswalk por code (cubre años con provincia errónea) -----------
-
+# Paso 3 — code crosswalk (solo filas donde provincia cruda = provincia real
+#          del ubigeo, para excluir contaminación de fill-bugs como TARATA 2015)
 code_xwalk <- m2 %>%
   filter(!is.na(ubigeo6)) %>%
-  count(code, ubigeo6, match_method, name = "n_obs") %>%
+  left_join(
+    Ubigeo_Master %>% select(ubigeo6, true_prov = provincia_std),
+    by = "ubigeo6"
+  ) %>%
+  filter(provincia_std == true_prov) %>%
+  count(code, ubigeo6, name = "n_obs") %>%
   group_by(code) %>%
   slice_max(n_obs, n = 1, with_ties = FALSE) %>%
   ungroup() %>%
-  select(code, ubigeo6_code = ubigeo6, src_code = match_method)
+  select(code, ubigeo6_code = ubigeo6)
 
 m3 <- m2 %>%
   left_join(code_xwalk, by = "code") %>%
   mutate(
     ubigeo6      = coalesce(ubigeo6, ubigeo6_code),
     match_method = coalesce(match_method,
-                            if_else(!is.na(ubigeo6_code),
-                                    paste0("code_xwalk[", src_code, "]"),
-                                    "unmatched"))
+                            if_else(!is.na(ubigeo6_code), "code_xwalk", "unmatched"))
   ) %>%
-  select(-ubigeo6_code, -src_code)
-
-# ---- QA ----------------------------------------------------------------------
-
-qa_final <- m3 %>%
-  summarise(
-    n_total            = n(),
-    n_match            = sum(match_method != "unmatched"),
-    n_unmatch          = sum(match_method == "unmatched"),
-    pct_match_rows     = n_match / n_total,
-    pct_match_credited = sum(credited[match_method != "unmatched"], na.rm = TRUE) /
-      sum(credited, na.rm = TRUE),
-    n_manual_fix       = sum(manual_fix_applied, na.rm = TRUE)
+  select(-ubigeo6_code) %>%
+  left_join(
+    Ubigeo_Master %>% select(ubigeo6,
+                             provincia_real = provincia_std,
+                             depto_real     = depto_std),
+    by = "ubigeo6"
   )
-print(qa_final)
 
-unmatched_transf <- m3 %>%
+Transferencias_Municipales <- m3 %>%
+  transmute(
+    ubigeo6,
+    year,
+    credited,
+    authorised,
+    code,
+    provincia_real,
+    depto_real,
+    distrito_raw  = name,
+    provincia_raw = province,
+    match_method
+  )
+
+# ==============================================================================
+# ---- 2. Transferencias_Regionales → cod_region (corregido) ------------------
+# ==============================================================================
+
+# Lookup directo: no colapsar Lima — Ubigeo_Master ya distingue
+# LIMA METROPOLITANA (metro) y LIMA PROVINCIAS (resto), que son receptores
+# separados del canon regional.
+region_lookup <- Ubigeo_Master %>%
+  distinct(cod_region, region_std)
+
+Transferencias_Regionales <- Transferencias_Regionales %>%
+  select(-any_of(c("cod_region", "region_std_clean", "match_method"))) %>%
+  mutate(
+    region_std_clean = normalizar_texto(name)
+  ) %>%
+  left_join(region_lookup, by = c("region_std_clean" = "region_std")) %>%
+  mutate(
+    match_method = if_else(!is.na(cod_region), "name_match", "unmatched")
+  )
+
+# QA Regional
+qa_reg <- Transferencias_Regionales %>%
+  group_by(match_method) %>%
+  summarise(
+    n          = n(),
+    n_regiones = n_distinct(name),
+    credited   = sum(credited, na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(pct_credited = credited / sum(credited))
+print(qa_reg)
+
+Transferencias_Regionales %>%
   filter(match_method == "unmatched") %>%
-  group_by(provincia_std, distrito_std) %>%
-  summarise(n = n(), credited = sum(credited, na.rm = TRUE), .groups = "drop") %>%
-  arrange(desc(credited))
-print(unmatched_transf, n = 100)
-
-# Chequeos de unicidad — deben devolver 0 filas
-m3 %>% distinct(code, ubigeo6) %>% count(code) %>% filter(n > 1)
-m3 %>% count(ubigeo6, year) %>% filter(n > 1)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+  distinct(name, region_std_clean) %>%
+  print()
 
 
 # ==============================================================================
-# ---- Mining Site Long: match por triple llave --------------------------------
+# ---- 3. Transferencias_Provinciales → cod_provincia -------------------------
 # ==============================================================================
 
-# Ubigeo_Master sin paréntesis (para join con Mining donde nombres son más limpios)
+prov_lookup <- Ubigeo_Master %>%
+  distinct(cod_provincia, provincia_std, depto_std)
+
+# Detectar homónimos antes del join (si los hay, el join creará filas dobles)
+prov_dupes <- prov_lookup %>% count(provincia_std) %>% filter(n > 1)
+
+Transferencias_Provinciales <- Transferencias_Provinciales %>%
+  select(-any_of(c("cod_provincia", "depto_std", "match_method"))) %>%
+  mutate(prov_std_clean = normalizar_texto(name)) %>%
+  left_join(
+    prov_lookup %>% select(cod_provincia, provincia_std, depto_std),
+    by = c("prov_std_clean" = "provincia_std")
+  ) %>%
+  mutate(
+    match_method = if_else(!is.na(cod_provincia), "name_match", "unmatched")
+  )
+
+# ==============================================================================
+# ---- QA: los tres datasets --------------------------------------------------
+# ==============================================================================
+
+cat("=== QA MUNICIPAL ===\n")
+
+qa_mun <- Transferencias_Municipales %>%
+  group_by(match_method) %>%
+  summarise(
+    n          = n(),
+    n_ubigeos  = n_distinct(ubigeo6),
+    credited   = sum(credited, na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(pct_credited = credited / sum(credited))
+print(qa_mun)
+
+# Pendientes
+Transferencias_Municipales %>%
+  filter(match_method == "unmatched") %>%
+  count(provincia_raw, distrito_raw, sort = TRUE) %>%
+  print(n = 20)
+
+# Unicidad (gates: 0 filas)
+stopifnot(
+  nrow(Transferencias_Municipales %>%
+         distinct(code, ubigeo6) %>% count(code) %>% filter(n > 1)) == 0,
+  nrow(Transferencias_Municipales %>%
+         count(ubigeo6, year) %>% filter(n > 1)) == 0
+)
+cat("Unicidad Municipal: OK\n")
+
+# Consistencia temporal por departamento
+district_coverage <- Transferencias_Municipales %>%
+  filter(match_method != "unmatched") %>%
+  group_by(depto_real, year) %>%
+  summarise(n_districts = n_distinct(ubigeo6), .groups = "drop") %>%
+  group_by(depto_real) %>%
+  mutate(
+    median_n      = median(n_districts),
+    pct_of_median = n_districts / median_n
+  ) %>%
+  ungroup()
+
+cat("\nDepartamentos con cobertura < 70% de su mediana (excl. datos fuente MEF):\n")
+district_coverage %>%
+  filter(pct_of_median < 0.70, median_n > 3) %>%
+  arrange(pct_of_median) %>%
+  print(n = 20)
+
+cat("\n=== QA REGIONAL ===\n")
+
+qa_reg <- Transferencias_Regionales %>%
+  group_by(match_method) %>%
+  summarise(
+    n          = n(),
+    n_regiones = n_distinct(name),
+    credited   = sum(credited, na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  mutate(pct_credited = credited / sum(credited))
+print(qa_reg)
+
+unmatched_reg <- Transferencias_Regionales %>%
+  filter(match_method == "unmatched") %>%
+  distinct(name, region_std_clean)
+if (nrow(unmatched_reg) > 0) {
+  cat("Regiones sin match:\n"); print(unmatched_reg)
+} else {
+  cat("Sin unmatched regionales.\n")
+}
+
+cat("\n=== QA PROVINCIAL ===\n")
+
+if (nrow(prov_dupes) > 0) {
+  cat("AVISO — Provincias homónimas (pueden crear duplicados de panel):\n")
+  print(prov_dupes)
+}
+
+qa_prov <- Transferencias_Provinciales %>%
+  group_by(match_method) %>%
+  summarise(
+    n            = n(),
+    n_provincias = n_distinct(name),
+    credited     = sum(credited, na.rm = TRUE),
+    .groups      = "drop"
+  ) %>%
+  mutate(pct_credited = credited / sum(credited))
+print(qa_prov)
+
+Transferencias_Provinciales %>%
+  filter(match_method == "unmatched") %>%
+  distinct(name, prov_std_clean) %>%
+  { if (nrow(.) > 0) { cat("Provincias sin match:\n"); print(.) } else cat("Sin unmatched provinciales.\n") }
+
+dup_prov_panel <- Transferencias_Provinciales %>%
+  count(name, year) %>% filter(n > 1)
+if (nrow(dup_prov_panel) > 0) {
+  cat("AVISO — Duplicados de panel por homónimos:\n"); print(dup_prov_panel)
+}
+
+# ==============================================================================
+# ---- Guardar ----------------------------------------------------------------
+# ==============================================================================
+
+saveRDS(Transferencias_Municipales,  "./Data/Transferencias_Municipales.rds")
+saveRDS(Transferencias_Regionales,   "./Data/Transferencias_Regionales.rds")
+saveRDS(Transferencias_Provinciales, "./Data/Transferencias_Provinciales.rds")
+
+cat("\nGuardado — Municipal:", nrow(Transferencias_Municipales), "filas\n")
+cat("Guardado — Regional:",  nrow(Transferencias_Regionales),  "filas\n")
+cat("Guardado — Provincial:", nrow(Transferencias_Provinciales), "filas\n")
+
+
+# ==============================================================================
+# ---- Mining_Site_long → ubigeo6 (triple llave) ------------------------------
+# ==============================================================================
+
+# ubigeo_mining: colapsa Lima Metropolitana + Lima Provincias → LIMA
+# (Mining_Site usa "LIMA" para toda la región Lima)
 ubigeo_mining <- Ubigeo_Master %>%
   mutate(
-    distrito_std = str_remove(distrito_std, "\\s*\\([^)]+\\)") %>% str_squish()
+    region_std   = if_else(
+      region_std %in% c("LIMA METROPOLITANA", "LIMA PROVINCIAS"),
+      "LIMA", region_std
+    ),
+    distrito_std = str_remove(distrito_std, "\\s*\\([^)]+\\)") %>%
+      str_replace_all("-", " ") %>%
+      str_squish()
   ) %>%
   distinct(ubigeo6, region_std, provincia_std, distrito_std)
+
+prov_alias_mining <- c("NAZCA" = "NASCA")
 
 mining_match <- Mining_Site_long %>%
   mutate(
     year     = as.integer(ANO),
+    reg_std  = normalizar_texto(REGION_STD),
+    prov_std = normalizar_texto(PROVINCIA_STD) %>% recode(!!!prov_alias_mining),
     dist_std = normalizar_texto(DISTRITO_STD) %>%
+      str_remove("\\s*\\([^)]+\\)") %>%
       str_replace_all("-", " ") %>%
       str_squish(),
-    prov_std = normalizar_texto(PROVINCIA_STD) %>%
-      recode("NAZCA" = "NASCA"),
-    reg_std  = normalizar_texto(REGION_STD)
+    # Correcciones de nombre de distrito
+    dist_std = case_when(
+      prov_std == "ESPINAR" & dist_std == "YAURI" ~ "ESPINAR",  # nombre histórico
+      prov_std == "NASCA"   & dist_std == "NAZCA" ~ "NASCA",    # ortografía MEF
+      TRUE                                        ~ dist_std
+    ),
+    # Corrección de provincia: OYON está en prov. OYON, no en CAJATAMBO
+    prov_std = case_when(
+      reg_std == "LIMA" & prov_std == "CAJATAMBO" & dist_std == "OYON" ~ "OYON",
+      TRUE                                                              ~ prov_std
+    )
   ) %>%
   left_join(
     ubigeo_mining %>% select(ubigeo6, region_std, provincia_std, distrito_std),
-    by = c("reg_std" = "region_std",
+    by = c("reg_std"  = "region_std",
            "prov_std" = "provincia_std",
            "dist_std" = "distrito_std")
   ) %>%
   mutate(match_method = if_else(!is.na(ubigeo6), "triple_key", "unmatched"))
 
-# ---- QA Mining ----
+# ---- QA Mining --------------------------------------------------------------
 
 qa_mining <- mining_match %>%
   group_by(match_method) %>%
@@ -340,10 +415,9 @@ qa_mining <- mining_match %>%
     n_rows      = n(),
     n_distritos = n_distinct(paste(reg_std, prov_std, dist_std)),
     revenue     = sum(revenue_usd, na.rm = TRUE),
-    .groups = "drop"
+    .groups     = "drop"
   ) %>%
-  mutate(pct_revenue = revenue / sum(revenue, na.rm = TRUE))
-
+  mutate(pct_revenue = revenue / sum(revenue))
 print(qa_mining)
 
 unmatched_mining <- mining_match %>%
@@ -351,658 +425,699 @@ unmatched_mining <- mining_match %>%
   group_by(reg_std, prov_std, dist_std) %>%
   summarise(n = n(), revenue = sum(revenue_usd, na.rm = TRUE), .groups = "drop") %>%
   arrange(desc(revenue))
-
 print(unmatched_mining, n = 50)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # ==============================================================================
-# ---- 3. Resolución de Llaves por Fuente + QA --------------------------------
+# ---- Decisión de ETAPA para instrumento Bartik ------------------------------
 # ==============================================================================
+# Se usa ÚNICAMENTE Concentración para construir el instrumento Bartik.
+# Justificación:
+#   1. Concentración representa el 82.4% del revenue total y cubre 239 de 241
+#      distritos mineros — es la etapa geográficamente representativa.
+#   2. Refinación (10.6%) y Fundición (7.0%) operan en un número reducido de
+#      plantas industriales (23 y 10 distritos respectivamente) y corresponden
+#      al mismo mineral contabilizado más adelante en la cadena productiva.
+#   3. El check siguiente confirma que 58 combinaciones distrito × año × mineral
+#      aparecen en más de una etapa: agregar todas las ETAPAs inflaría el revenue.
 
-## 3.1 ENAHO sumaria: UBIGEO directo (pad a 6) ----
+# --- Check de double-counting entre ETAPAs -----------------------------------
+n_doble_conteo <- Mining_Site_long %>%
+  distinct(DISTRITO_STD, PROVINCIA_STD, ANO, mineral, ETAPA) %>%
+  count(DISTRITO_STD, PROVINCIA_STD, ANO, mineral) %>%
+  filter(n > 1) %>%
+  nrow()
+stopifnot(n_doble_conteo > 0)   # confirma que el problema existe
+cat("Combinaciones distrito×año×mineral con >1 ETAPA:", n_doble_conteo, "\n")
 
-# ENAHO trae UBIGEO de 5 dígitos (sin cero inicial para dptos. 01–09).
-enaho_keys <- ENAHO_sumaria %>%
-  mutate(
-    ubigeo6_raw = as.character(UBIGEO),
-    ubigeo6     = pad6(ubigeo6_raw),
-    year        = as.integer(AÑO)
+# --- Cobertura por etapa (referencia) ----------------------------------------
+Mining_Site_long %>%
+  group_by(ETAPA) %>%
+  summarise(
+    n_distritos = n_distinct(paste(DISTRITO_STD, PROVINCIA_STD)),
+    revenue     = sum(revenue_usd, na.rm = TRUE),
+    .groups     = "drop"
   ) %>%
+  mutate(pct_revenue = revenue / sum(revenue) * 100) %>%
+  arrange(desc(revenue)) %>%
+  print()
+
+
+# ==============================================================================
+# ---- Guardar ----------------------------------------------------------------
+# ==============================================================================
+
+Mining_Site <- mining_match %>%
+  transmute(
+    ubigeo6,
+    year,
+    ETAPA,
+    mineral,
+    revenue_usd,
+    match_method,
+    reg_raw   = REGION_STD,
+    prov_raw  = PROVINCIA_STD,
+    dist_raw  = DISTRITO_STD
+  )
+
+saveRDS(Mining_Site, "./Data/Mining_Site.rds")
+
+# QA final
+cat("Filas totales:", nrow(Mining_Site), "\n")
+cat("Distritos únicos:", n_distinct(Mining_Site$ubigeo6), "\n")
+cat("Unmatched:", sum(Mining_Site$match_method == "unmatched"), "\n")
+Mining_Site %>% count(ETAPA)
+
+
+# ==============================================================================
+# ---- ENAHO: diagnóstico de cobertura ubigeo ---------------------------------
+# ==============================================================================
+
+# pad6 lo tenemos de Main.R
+pad6 <- function(x) str_pad(as.character(x), 6, "left", "0")
+
+enaho_s <- readRDS("./Data/ENAHO_sumaria.rds")
+
+cat("=== Columnas de ENAHO_sumaria ===\n")
+print(names(enaho_s))
+
+cat("\n=== Años disponibles ===\n")
+print(table(enaho_s$AÑO))
+
+cat("\n=== Muestra de UBIGEO raw ===\n")
+print(head(sort(unique(enaho_s$UBIGEO)), 20))
+
+# Padear a 6 dígitos
+enaho_s <- enaho_s %>%
+  mutate(
+    ubigeo6 = pad6(UBIGEO),
+    year    = as.integer(AÑO)
+  )
+
+cat("\n=== Verificación: todos ubigeo6 tienen 6 chars? ===\n")
+print(table(nchar(enaho_s$ubigeo6)))
+
+# ¿Cuántos ubigeos distintos hay en ENAHO?
+cat("\n=== Ubigeos únicos en ENAHO ===\n")
+cat("Total:", n_distinct(enaho_s$ubigeo6), "\n")
+
+# Cruzar con Ubigeo_Master
+cat("\n=== Match contra Ubigeo_Master ===\n")
+cat("En Ubigeo_Master:", n_distinct(Ubigeo_Master$ubigeo6), "distritos\n")
+cat("ENAHO ubigeos en Ubigeo_Master:", 
+    sum(unique(enaho_s$ubigeo6) %in% Ubigeo_Master$ubigeo6), "\n")
+cat("ENAHO ubigeos NO en Ubigeo_Master:", 
+    sum(!unique(enaho_s$ubigeo6) %in% Ubigeo_Master$ubigeo6), "\n")
+
+# ¿Cuántos distritos-año en ENAHO?
+enaho_cobertura <- enaho_s %>%
+  group_by(ubigeo6, year) %>%
+  summarise(n_hogares = n(), .groups = "drop")
+
+cat("\n=== Cobertura distrital por año (cuántos distritos tienen datos ENAHO) ===\n")
+enaho_cobertura %>%
+  count(year, name = "n_distritos") %>%
+  print(n = 30)
+
+# ---- 1. Identificar los 5 ubigeos no matcheados ----------------------------
+enaho_sin_match <- enaho_s %>%
+  filter(!ubigeo6 %in% Ubigeo_Master$ubigeo6) %>%
+  group_by(ubigeo6) %>%
+  summarise(
+    n_hogares = n(),
+    years     = paste(sort(unique(year)), collapse = ", "),
+    .groups   = "drop"
+  )
+print(enaho_sin_match)
+
+# ---- 2. Agregar ENAHO a nivel distrito × año --------------------------------
+# Usar FACTOR07 como peso (diseño muestral ENAHO)
+ENAHO_panel <- enaho_s %>%
+  filter(ubigeo6 %in% Ubigeo_Master$ubigeo6) %>%          # excluir 5 sin match
+  group_by(ubigeo6, year) %>%
+  summarise(
+    n_hogares        = n(),
+    ingbruhd_mean    = weighted.mean(INGBRUHD,  FACTOR07, na.rm = TRUE),
+    inghog2d_mean    = weighted.mean(INGHOG2D,  FACTOR07, na.rm = TRUE),
+    gashog2d_mean    = weighted.mean(GASHOG2D,  FACTOR07, na.rm = TRUE),
+    pct_pobre        = weighted.mean(POBREZA == 1, FACTOR07, na.rm = TRUE),
+    pct_pobre_ext    = weighted.mean(POBREZA == 2, FACTOR07, na.rm = TRUE),
+    .groups          = "drop"
+  )
+
+# QA rápido
+cat("Filas ENAHO_panel:", nrow(ENAHO_panel), "\n")
+cat("Distritos únicos:", n_distinct(ENAHO_panel$ubigeo6), "\n")
+cat("Años únicos:", n_distinct(ENAHO_panel$year), "\n")
+
+# Cobertura: % de distrito-año con al menos 10 hogares
+cat("Celdas con >= 10 hogares:",
+    mean(ENAHO_panel$n_hogares >= 10) * 100, "%\n")
+
+# Check: distribución de hogares por celda
+quantile(ENAHO_panel$n_hogares, c(0.05, 0.25, 0.5, 0.75, 0.95))
+
+# 5 ubigeos sin match:
+  # 120699 (824 hogares, 2013-2020): sufijo "99" en ENAHO = código comodín/no
+    # asignado del diseño muestral. No es un distrito real.
+  # 160109, 160203/04/07 (14-43 hogares, 2004-2012): códigos de Ucayali que
+    # desaparecen antes de 2013 — reorganizaciones territoriales INEI. Irrelevantes.
+
+# ==============================================================================
+# ---- Panel: construcción ----------------------------------------------------
+# ==============================================================================
+
+# ---- Mining → distrito × año ------------------------------------------------
+# Se usa solo Concentración para evitar doble conteo en operaciones 
+# verticalmente integradas. 58 combinaciones distrito×año×mineral aparecen en 
+# más de una etapa; Concentración representa el 82.4% del revenue y 239/241 
+# distritos mineros.
+Mining_dist_year <- Mining_Site %>%
+  filter(ETAPA == "Concentración") %>%
+  group_by(ubigeo6, year) %>%
+  summarise(
+    revenue_conc_usd = sum(revenue_usd, na.rm = TRUE),
+    n_minerales      = n_distinct(mineral),
+    .groups          = "drop"
+  )
+
+# ---- Transferencias → distrito × año ----------------------------------------
+stopifnot("ubigeo6" %in% names(Transferencias_Municipales))
+
+Transf_dist_year <- Transferencias_Municipales %>%
+  filter(!is.na(ubigeo6)) %>%
+  mutate(year = as.integer(year)) %>%
+  group_by(ubigeo6, year) %>%
+  summarise(
+    canon_credited_mpen = sum(credited,   na.rm = TRUE),
+    canon_auth_mpen     = sum(authorised, na.rm = TRUE),
+    .groups             = "drop"
+  )
+
+# ---- Exchange rate ----------------------------------------------------------
+EX_clean <- EX %>%
+  rename(year = 1, pen_usd = 2) %>%
+  mutate(year = as.integer(year), pen_usd = as.numeric(pen_usd))
+
+# ---- Skeleton + joins -------------------------------------------------------
+Panel <- expand_grid(
+  ubigeo6 = Ubigeo_Master$ubigeo6,
+  year    = 2004L:2024L
+) %>%
   left_join(
-    master_distrito %>% select(ubigeo6, region_std, provincia_std, distrito_std),
+    Ubigeo_Master %>%
+      select(ubigeo6, region_std, depto_std, provincia_std, distrito_std,
+             cod_region, cod_provincia),
     by = "ubigeo6"
   ) %>%
+  left_join(Transf_dist_year, by = c("ubigeo6", "year")) %>%
+  left_join(ENAHO_panel,      by = c("ubigeo6", "year")) %>%
+  left_join(Mining_dist_year, by = c("ubigeo6", "year")) %>%
+  left_join(EX_clean,         by = "year") %>%
   mutate(
-    match_method = if_else(!is.na(distrito_std), "direct_ubigeo", "unmatched"),
-    source       = "ENAHO_sumaria"
+    canon_credited_mpen = replace_na(canon_credited_mpen, 0),
+    canon_auth_mpen     = replace_na(canon_auth_mpen,     0),
+    revenue_conc_usd    = replace_na(revenue_conc_usd,    0),
+    treated             = as.integer(canon_credited_mpen > 0),
+    mining_district     = as.integer(revenue_conc_usd    > 0),
+    canon_credited_musd = canon_credited_mpen / pen_usd,
+    log_canon           = log(canon_credited_mpen + 1),
+    asinh_canon         = asinh(canon_credited_mpen),
+    log_revenue         = log(revenue_conc_usd + 1),
+    enaho_reliable      = as.integer(!is.na(n_hogares) & n_hogares >= 10),
+    log_ingreso         = log(inghog2d_mean + 1),
+    log_gasto           = log(gashog2d_mean + 1)
   )
 
-qa_enaho <- enaho_keys %>%
-  summarise(
-    n         = n(),
-    n_match   = sum(match_method != "unmatched"),
-    n_unmatch = sum(match_method == "unmatched"),
-    pct_match = n_match / n
-  )
-print(qa_enaho)
 
-## 3.2 Transferencias municipales: join por provincia+distrito normalizados ----
+# ---- QA ---------------------------------------------------------------------
+cat("=== QA Panel ===\n")
+cat("Filas:", nrow(Panel),
+    "| Distritos:", n_distinct(Panel$ubigeo6),
+    "| Años:",     n_distinct(Panel$year), "\n")
 
-# OJO: Transferencias_Municipales$code tiene formato "01-300001" — NO es ubigeo INEI.
-# No usarlo como llave. Join por nombre después de limpieza (Import_Claude.R).
+Panel %>%
+  count(treated) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  print()
 
-transf_keys <- Transferencias_Municipales %>%
-  mutate(
-    distrito_std  = normalize_name(name),
-    provincia_std = normalize_name(province),
-    year          = as.integer(year)
-  ) %>%
-  left_join(
-    master_distrito %>% select(ubigeo6, provincia_std, distrito_std, region_std),
-    by = c("provincia_std", "distrito_std")
-  ) %>%
-  mutate(
-    match_method = if_else(!is.na(ubigeo6), "name_province", "unmatched"),
-    source       = "Transferencias_Municipales"
-  )
+cat("ENAHO celdas con datos:            ", sum(!is.na(Panel$inghog2d_mean)), "\n")
+cat("ENAHO celdas confiables (>=10 hog):", sum(Panel$enaho_reliable == 1, na.rm = TRUE), "\n")
 
-# Detectar ambigüedad (homónimos dentro de misma provincia)
-amb_transf <- transf_keys %>%
-  filter(!is.na(ubigeo6)) %>%
-  distinct(provincia_std, distrito_std, ubigeo6) %>%
-  group_by(provincia_std, distrito_std) %>%
-  summarise(n_ubigeo = n(), .groups = "drop") %>%
-  filter(n_ubigeo > 1)
-
-qa_transf <- transf_keys %>%
-  summarise(
-    n         = n(),
-    n_match   = sum(match_method != "unmatched"),
-    n_unmatch = sum(match_method == "unmatched"),
-    pct_match = n_match / n,
-    n_amb     = nrow(amb_transf)
-  )
-print(qa_transf)
-
-## 3.3 Mining site distrito: triple llave (distrito + provincia + region) ----
-
-# Mining_Site_distrito agregado solo trae DISTRITO_STD + ANO. Para desambiguar
-# homónimos, recuperamos provincia/region desde Mining_Site antes de agregar.
-
-mining_dist_full <- Mining_Site %>%
-  transmute(
-    distrito_std  = normalize_name(DISTRITO_STD),
-    provincia_std = normalize_name(PROVINCIA_STD),
-    region_std    = normalize_name(REGION_STD),
-    year          = as.integer(ANO)
-  ) %>%
-  distinct()
-
-mining_keys <- mining_dist_full %>%
-  left_join(
-    master_distrito %>% select(ubigeo6, region_std, provincia_std, distrito_std),
-    by = c("region_std", "provincia_std", "distrito_std")
-  ) %>%
-  mutate(
-    match_method = case_when(
-      !is.na(ubigeo6) ~ "triple_key",
-      TRUE            ~ "unmatched"
-    ),
-    source = "Mining_Site"
-  )
-
-qa_mining <- mining_keys %>%
-  summarise(
-    n         = n(),
-    n_match   = sum(match_method != "unmatched"),
-    n_unmatch = sum(match_method == "unmatched"),
-    pct_match = n_match / n
-  )
-print(qa_mining)
-
-## 3.4 Consolidar casos de revisión manual ----
-
-manual_review <- bind_rows(
-  enaho_keys  %>% filter(match_method == "unmatched") %>%
-    distinct(source, ubigeo6_raw, ubigeo6),
-  transf_keys %>% filter(match_method == "unmatched") %>%
-    distinct(source, provincia_std, distrito_std, ubigeo6),
-  mining_keys %>% filter(match_method == "unmatched") %>%
-    distinct(source, region_std, provincia_std, distrito_std, ubigeo6)
-)
-
-## 3.5 Persistir QA (para trazabilidad) ----
-
-write.csv(qa_master,         file.path(DIR_DERIVED, "qa_master.csv"),         row.names = FALSE)
-write.csv(qa_master_vs_map,  file.path(DIR_DERIVED, "qa_master_vs_map.csv"),  row.names = FALSE)
-write.csv(qa_enaho,          file.path(DIR_DERIVED, "qa_enaho.csv"),          row.names = FALSE)
-write.csv(qa_transf,         file.path(DIR_DERIVED, "qa_transferencias.csv"), row.names = FALSE)
-write.csv(qa_mining,         file.path(DIR_DERIVED, "qa_mining.csv"),         row.names = FALSE)
-write.csv(amb_transf,        file.path(DIR_DERIVED, "qa_transf_ambiguous.csv"), row.names = FALSE)
-write.csv(manual_review,     file.path(DIR_DERIVED, "manual_review_keys.csv"), row.names = FALSE)
-
-## 3.6 Gate de calidad: exige >= 98% de match en todas las fuentes ----
-
-MATCH_THRESHOLD <- 0.98
-if (qa_enaho$pct_match  < MATCH_THRESHOLD ||
-    qa_transf$pct_match < MATCH_THRESHOLD ||
-    qa_mining$pct_match < MATCH_THRESHOLD) {
-  warning(sprintf(
-    "Match rate por debajo de %.0f%% — revisa manual_review_keys.csv antes del panel.\n  ENAHO: %.3f  Transf: %.3f  Mining: %.3f",
-    MATCH_THRESHOLD * 100,
-    qa_enaho$pct_match, qa_transf$pct_match, qa_mining$pct_match
-  ))
-}
+Panel %>%
+  summarise(across(
+    c(canon_credited_mpen, inghog2d_mean, pct_pobre, revenue_conc_usd),
+    ~ sum(is.na(.))
+  )) %>%
+  print()
 
 
 # ==============================================================================
-# ---- 4. Panel Distrito × Año ------------------------------------------------
+# ---- Parte 5. Variables de Tratamiento ---------------------------------------
 # ==============================================================================
 
-## 4.1 Esqueleto canónico ----
+# ---- 5.1 Indicadores DiD ----------------------------------------------------
 
-panel_skeleton <- expand_grid(
-  ubigeo6 = master_distrito$ubigeo6,
-  year    = full_years
-)
-
-## 4.2 Transferencias agregadas por ubigeo6-año ----
-
-transfers_panel <- transf_keys %>%
-  filter(!is.na(ubigeo6), !is.na(year)) %>%
-  group_by(ubigeo6, year) %>%
-  summarise(
-    canon_credited_mpen   = sum(credited,   na.rm = TRUE),
-    canon_authorised_mpen = sum(authorised, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-## 4.3 ENAHO agregada con peso muestral ----
-
-enaho_panel <- enaho_keys %>%
-  filter(!is.na(ubigeo6), !is.na(year)) %>%
-  group_by(ubigeo6, year) %>%
-  summarise(
-    n_households     = n(),
-    ingbruhd_mean    = weighted.mean(INGBRUHD, FACTOR07, na.rm = TRUE),
-    inghog2d_mean    = weighted.mean(INGHOG2D, FACTOR07, na.rm = TRUE),
-    gashog2d_mean    = weighted.mean(GASHOG2D, FACTOR07, na.rm = TRUE),
-    pct_poor         = weighted.mean(POBREZA == 1, FACTOR07, na.rm = TRUE),
-    pct_extreme_poor = weighted.mean(POBREZA == 2, FACTOR07, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-## 4.4 Mining site agregado distrito-año ----
-
-# production total (kg ó TMF según clasificación) por distrito-año
-mining_panel <- Mining_Site_long %>%
-  transmute(
-    distrito_std  = normalize_name(DISTRITO_STD),
-    provincia_std = normalize_name(PROVINCIA_STD),
-    region_std    = normalize_name(REGION_STD),
-    year          = as.integer(ANO),
-    production    = as.numeric(production)
-  ) %>%
-  left_join(
-    master_distrito %>% select(ubigeo6, region_std, provincia_std, distrito_std),
-    by = c("region_std", "provincia_std", "distrito_std")
-  ) %>%
-  filter(!is.na(ubigeo6), !is.na(year)) %>%
-  group_by(ubigeo6, year) %>%
-  summarise(produccion_total = sum(production, na.rm = TRUE), .groups = "drop")
-
-## 4.5 Covariables time-invariant desde master ----
-
-ubigeo_chars <- master_distrito %>%
-  select(ubigeo6, departamento_std, provincia_std, distrito_std, region_std,
-         altitude, latitude, longitude, superficie, pob_densidad_2020,
-         idh_2019, ivfa, pct_pobreza_total, pct_pobreza_extrema)
-
-## 4.6 Ensamblar panel ----
-
-panel <- panel_skeleton %>%
-  left_join(transfers_panel, by = c("ubigeo6", "year")) %>%
-  left_join(enaho_panel,     by = c("ubigeo6", "year")) %>%
-  left_join(mining_panel,    by = c("ubigeo6", "year")) %>%
-  left_join(ubigeo_chars,    by = "ubigeo6") %>%
-  left_join(EX,              by = "year") %>%
-  mutate(
-    canon_credited_mpen   = replace_na(canon_credited_mpen,   0),
-    canon_authorised_mpen = replace_na(canon_authorised_mpen, 0),
-    produccion_total      = replace_na(produccion_total,      0),
-    canon_credited_musd   = canon_credited_mpen / pen_usd
-  )
-
-# QA del panel
-qa_panel <- tibble(
-  n_rows       = nrow(panel),
-  n_distritos  = n_distinct(panel$ubigeo6),
-  n_years      = n_distinct(panel$year),
-  n_dup_key    = sum(duplicated(panel[, c("ubigeo6", "year")]))
-)
-print(qa_panel)
-stopifnot(qa_panel$n_dup_key == 0)
-
-
-# ==============================================================================
-# ---- 5. Variables de Tratamiento (DiD / IV-Bartik) --------------------------
-# ==============================================================================
-
-## 5.1 Intensive / extensive margin ----
-
-panel <- panel %>%
-  mutate(
-    treated       = as.integer(canon_credited_mpen > 0),
-    log_canon_pen = log(canon_credited_mpen + 1),
-    log_canon_usd = log(canon_credited_musd + 1),
-    log_prod      = log(produccion_total    + 1)
-  )
-
-## 5.2 Ever-treated y timing de tratamiento ----
-
-ever_treated <- panel %>%
+ever_treated_tab <- Panel %>%
   group_by(ubigeo6) %>%
   summarise(ever_treated = as.integer(any(treated == 1)), .groups = "drop")
 
-first_year_treated <- panel %>%
+first_treat_tab <- Panel %>%
   filter(treated == 1) %>%
   group_by(ubigeo6) %>%
   summarise(first_treat_year = min(year), .groups = "drop")
 
-panel <- panel %>%
-  left_join(ever_treated,       by = "ubigeo6") %>%
-  left_join(first_year_treated, by = "ubigeo6") %>%
+Panel <- Panel %>%
+  left_join(ever_treated_tab, by = "ubigeo6") %>%
+  left_join(first_treat_tab,  by = "ubigeo6") %>%
   mutate(
     time_to_treat = if_else(!is.na(first_treat_year),
-                            year - first_treat_year, NA_integer_)
+                            as.integer(year - first_treat_year),
+                            NA_integer_)
   )
 
-## 5.3 Shares pre-período para Bartik (shift-share IV) ----
+# ---- 5.2 Instrumento Bartik (Shift-Share) -----------------------------------
+# Lógica: Z_{d,t} = Σ_m  share_{d,m,pre} × (P_{m,t} / P_{m,pre})
+# - share_{d,m,pre}: fracción del revenue de Concentración en el pre-período
+#   que corresponde al mineral m en el distrito d
+# - P_{m,t} / P_{m,pre}: índice de precio internacional (= 1 en período base)
+# Pre-período: 2004–2006 (tres primeros años, antes del boom minero)
 
-# Shares de producción minera por distrito en el período pre-reforma (2004–2006)
-# Ajusta el cutoff pre_window según el diseño de identificación.
+pre_years <- 2004:2006
 
-pre_window <- 2004:2006
+# Precio base por mineral (promedio 2004–2006)
+price_base <- All_Prices_long %>%
+  filter(year %in% pre_years) %>%
+  group_by(mineral) %>%
+  summarise(price_base = mean(price, na.rm = TRUE), .groups = "drop")
 
-mining_shares_pre <- panel %>%
-  filter(year %in% pre_window) %>%
+# Índice de precio: P_{m,t} / P_{m,pre}
+price_index <- All_Prices_long %>%
+  mutate(year = as.integer(year)) %>%
+  left_join(price_base, by = "mineral") %>%
+  mutate(price_idx = price / price_base) %>%
+  select(year, mineral, price_idx)
+
+# Shares pre-período por distrito × mineral (Concentración únicamente)
+shares_pre <- Mining_Site %>%
+  filter(ETAPA == "Concentración", year %in% pre_years) %>%
+  group_by(ubigeo6, mineral) %>%
+  summarise(revenue_pre = sum(revenue_usd, na.rm = TRUE), .groups = "drop") %>%
   group_by(ubigeo6) %>%
-  summarise(prod_pre = sum(produccion_total, na.rm = TRUE), .groups = "drop") %>%
-  mutate(
-    prod_pre_total = sum(prod_pre, na.rm = TRUE),
-    share_pre      = if_else(prod_pre_total > 0, prod_pre / prod_pre_total, 0)
-  ) %>%
-  select(ubigeo6, share_pre)
+  mutate(share_pre = revenue_pre / sum(revenue_pre)) %>%
+  ungroup() %>%
+  select(ubigeo6, mineral, share_pre)
 
-# Shift nacional: precio o producción agregada (placeholder; conectar con IV real)
-national_shift <- panel %>%
-  group_by(year) %>%
-  summarise(prod_nacional = sum(produccion_total, na.rm = TRUE), .groups = "drop")
-
-bartik <- expand_grid(
-  ubigeo6 = unique(panel$ubigeo6),
-  year    = full_years
-) %>%
-  left_join(mining_shares_pre, by = "ubigeo6") %>%
-  left_join(national_shift,    by = "year") %>%
-  mutate(bartik_iv = share_pre * prod_nacional)
-
-panel <- panel %>%
-  left_join(bartik %>% select(ubigeo6, year, share_pre, bartik_iv),
-            by = c("ubigeo6", "year"))
-
-
-# ==============================================================================
-# ---- 6. Descriptivos --------------------------------------------------------
-# ==============================================================================
-
-## 6.1 Coverage ----
-
-cat("Panel dims:",        nrow(panel), "rows,", ncol(panel), "cols\n")
-cat("Distritos:",          n_distinct(panel$ubigeo6), "\n")
-cat("Años:",               n_distinct(panel$year), "\n")
-cat("Ever-treated:",       sum(ever_treated$ever_treated), "\n")
-cat("Never-treated:",      sum(ever_treated$ever_treated == 0), "\n")
-cat("ENAHO con ingreso:",  sum(!is.na(panel$ingbruhd_mean)), "\n")
-cat("Mining>0:",           sum(panel$produccion_total > 0, na.rm = TRUE), "\n")
-
-## 6.2 Transferencias totales por año ----
-
-transfers_by_year <- panel %>%
-  group_by(year) %>%
+# Bartik: cross de shares × índice de precios → agregar por distrito-año
+Bartik <- shares_pre %>%
+  left_join(price_index, by = "mineral") %>%   # expande a todos los años
+  group_by(ubigeo6, year) %>%
   summarise(
-    total_canon_mpen = sum(canon_credited_mpen, na.rm = TRUE),
-    n_treated        = sum(treated),
-    .groups = "drop"
+    bartik     = sum(share_pre * price_idx,       na.rm = TRUE),
+    log_bartik = sum(share_pre * log(price_idx),  na.rm = TRUE),
+    .groups    = "drop"
   )
 
-ggplot(transfers_by_year, aes(x = year, y = total_canon_mpen)) +
-  geom_col(fill = "#3B7CB4") +
-  scale_x_continuous(breaks = full_years) +
-  labs(title = "Canon Minero total transferido a municipalidades",
-       x = "Año", y = "Total acreditado (millones PEN)") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+# QA Bartik
+cat("Distritos con Bartik:", n_distinct(Bartik$ubigeo6), "\n")
+cat("Celdas Bartik:", nrow(Bartik), "\n")
+summary(Bartik$bartik)
 
-## 6.3 Distribución log-transfers entre tratados ----
+# Añadir al panel
+Panel <- Panel %>%
+  left_join(Bartik, by = c("ubigeo6", "year"))
 
-panel %>%
-  filter(ever_treated == 1, year == 2010) %>%
-  ggplot(aes(x = log_canon_pen)) +
-  geom_histogram(bins = 40, fill = "#3B7CB4", colour = "white") +
-  labs(title = "Distribución de log Canon (tratados, 2010)",
-       x = "log(canon + 1, millones PEN)", y = "Frecuencia") +
-  theme_minimal()
+# ---- 5.3 QA final antes de regresión ----------------------------------------
+cat("\n=== Muestra de regresión ===\n")
+panel_reg <- Panel %>% filter(enaho_reliable == 1)
+cat("Filas (ENAHO confiable):", nrow(panel_reg), "\n")
+cat("Distritos:", n_distinct(panel_reg$ubigeo6), "\n")
+cat("Con Bartik:", sum(!is.na(panel_reg$bartik)), "\n")
+cat("NA en log_ingreso:", sum(is.na(panel_reg$log_ingreso)), "\n")
+
+
+# ==============================================================================
+# ---- Primera Regresión -------------------------------------------------------
+# ==============================================================================
+
+# ---- OLS-FE: baseline -------------------------------------------------------
+m1 <- feols(log_ingreso ~ log_canon | ubigeo6 + year,
+            data    = panel_reg,
+            cluster = ~ubigeo6)
+
+# ---- OLS-FE: controlando por producción minera local ------------------------
+m2 <- feols(log_ingreso ~ log_canon + log_revenue | ubigeo6 + year,
+            data    = panel_reg,
+            cluster = ~ubigeo6)
+
+# ---- IV-Bartik --------------------------------------------------------------
+m3 <- feols(log_ingreso ~ 1 | ubigeo6 + year | log_canon ~ log_bartik,
+            data    = panel_reg %>% filter(!is.na(log_bartik)),
+            cluster = ~ubigeo6)
+
+# ---- IV-Bartik + control producción ----------------------------------------
+m4 <- feols(log_ingreso ~ log_revenue | ubigeo6 + year | log_canon ~ log_bartik,
+            data    = panel_reg %>% filter(!is.na(log_bartik)),
+            cluster = ~ubigeo6)
+
+# ---- Resultados -------------------------------------------------------------
+etable(m1, m2, m3, m4,
+       se.below   = TRUE,
+       keep       = c("log_canon", "log_revenue"),
+       dict       = c(log_canon   = "log Canon (credited)",
+                      log_revenue = "log Mining revenue (USD)"),
+       fitstat    = ~ r2 + n + ivwald)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # ==============================================================================

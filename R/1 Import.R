@@ -149,24 +149,27 @@ summary(Transferencias_Municipales)
 
 ###Cleaning###
 
+# ---- Regionales: limpiar prefijos ------------------------------------------
 Transferencias_Regionales <- Transferencias_Regionales %>%
-  mutate(name = str_remove(name, "^GOBIERNO REGIONAL "),
-         name = str_remove(name, "^DEL DEPARTAMENTO DE "),
-         name = str_remove(name, "^DE LA PROVINCIA CONSTITUCIONAL DEL "),
-         name = str_replace(name, "^MUNICIPALIDAD METROPOLITANA DE LIMA$", "LIMA METROPOLITANA"),
-         name = str_replace(name, "^LIMA$", "LIMA PROVINCIAS"))
-
-Transferencias_Municipales <-  Transferencias_Municipales %>% 
   mutate(
-    name = str_replace(name, "^MUNICIPALIDAD PROVINCIAL DE LIMA$", "LIMA"),
-    name = str_replace(name, "^MUN. PRO. DE LIMA$", "LIMA"),
-    name = str_replace(name, "^MUNICIPALIDAD METROPOLITANA DE LIMA$", "LIMA")
-    ) #Inconsistent naming for Lima Metropolitana, although all share the same
-      #code with "MUNICIPALIDAD METROPOLITANA DE LIMA". For this reason, the
-      #name is unified.
+    name = str_remove(name, "^GOBIERNO REGIONAL "),
+    name = str_remove(name, "^DEL DEPARTAMENTO DE "),
+    name = str_remove(name, "^DE LA PROVINCIA CONSTITUCIONAL DEL "),
+    name = str_replace(name, "^MUNICIPALIDAD METROPOLITANA DE LIMA$", "LIMA METROPOLITANA"),
+    name = str_replace(name, "^LIMA$", "LIMA PROVINCIAS")
+  )
 
-
+# ---- Municipales: paso 1 — unificar Lima ------------------------------------
 Transferencias_Municipales <- Transferencias_Municipales %>%
+  mutate(
+    name = str_replace(name, "^MUNICIPALIDAD PROVINCIAL DE LIMA$",   "LIMA"),
+    name = str_replace(name, "^MUN. PRO. DE LIMA$",                  "LIMA"),
+    name = str_replace(name, "^MUNICIPALIDAD METROPOLITANA DE LIMA$", "LIMA")
+  )
+
+# ---- Municipales: paso 2 — extraer province con fill dentro de año ----------
+Transferencias_Municipales <- Transferencias_Municipales %>%
+  group_by(year) %>%
   mutate(
     province = if_else(
       str_detect(name, "^MUN\\. PRO\\.|^MUNICIPALIDAD PROVINCIAL|^LIMA$"),
@@ -174,12 +177,10 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
       NA_character_
     )
   ) %>%
-  fill(province)  #Para identificar las municipales por provincia se arrastra la 
-                  #línea de provincia hasta la siguiente provincia. Están 
-                  #organizadas en orden. Igualmente se comprueba con el dataset
-                  #de mapa para verificar luego de limpiar nombres.
+  fill(province) %>%
+  ungroup()
 
-
+# ---- Municipales: paso 3 — corrección DATEM DEL MARAÑON --------------------
 Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(
     province = case_when(
@@ -191,12 +192,11 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
       ) ~ "MUNICIPALIDAD PROVINCIAL DEL ALTO AMAZONAS - YURIMAGUAS",
       TRUE ~ province
     )
-  ) #Existen algunas observaciones que están marcadas como DATEM DEL MANON
-    #cuando pertenecen a ALTO AMAZONAS
+  )
 
-
+# ---- Municipales: paso 4 — filtrar a distritos y limpiar province ----------
 Transferencias_Municipales <- Transferencias_Municipales %>%
-  filter(grepl("MUN\\. PRO\\.|^MUNICIPALIDAD PROVINCIAL |^LIMA$", province)) %>% 
+  filter(grepl("MUN\\. PRO\\.|^MUNICIPALIDAD PROVINCIAL |^LIMA$", province)) %>%
   mutate(
     province = str_remove(province, "^MUN\\. PRO\\. DE "),
     province = str_remove(province, "^MUN\\. PRO\\. DEL "),
@@ -205,22 +205,10 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
     province = str_remove(province, "^MUNICIPALIDAD PROVINCIAL DE "),
     province = str_remove(province, "^MUNICIPALIDAD PROVINCIAL "),
     province = str_remove(province, "\\s*-.*")
-  ) #Limpiar nombres para poder hacer comparación con Mapa_Distrito
+  )
 
-
-Transferencias_Provinciales <- Transferencias_Municipales %>%
-  select(-code, -name) %>%
-  group_by(province, year) %>%
-  summarise(
-    authorised = sum(authorised, na.rm = TRUE),
-    credited   = sum(credited, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  rename(name = province)
-
-
-
-Transferencias_Municipales <- Transferencias_Municipales %>% 
+# ---- Municipales: paso 5 — limpiar name (district) -------------------------
+Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(
     name = str_remove(name, "^MUN\\. DIS\\. DE "),
     name = str_remove(name, "^MUN\\. PRO\\. DE "),
@@ -238,158 +226,193 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
     name = str_remove(name, "^.*-\\s*")
   )
 
-###Validación nombres de provincias en distritos que recibieron transferencia###
-
+# ---- Municipales: paso 6 — normalizar texto ---------------------------------
 Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(
     province = str_squish(stri_trans_general(str_to_upper(province), "Latin-ASCII")),
-    name     = str_squish(stri_trans_general(str_to_upper(name), "Latin-ASCII"))
+    name     = str_squish(stri_trans_general(str_to_upper(name),     "Latin-ASCII"))
   )
 
 Mapa_Distrito <- Mapa_Distrito %>%
   mutate(
     PROVINCIA = str_squish(stri_trans_general(str_to_upper(PROVINCIA), "Latin-ASCII")),
-    DISTRITO  = str_squish(stri_trans_general(str_to_upper(DISTRITO), "Latin-ASCII"))
+    DISTRITO  = str_squish(stri_trans_general(str_to_upper(DISTRITO),  "Latin-ASCII"))
   )
 
-Transferencias_Provinciales <- Transferencias_Provinciales %>% 
+# ---- Municipales: paso 7 — correcciones de nombre de distrito ---------------
+Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(name = case_when(
-  name == "NAZCA" ~ "NASCA",
-  name == "CAÑETE" ~ "CANETE",
-  name == "SANCHEZ CERRO" ~ "GENERAL SANCHEZ CERRO",
-  name == "DANIEL CARRION" ~ "DANIEL ALCIDES CARRION",
-  name == "CUZCO" ~ "CUSCO",
-  name == "QUISPICANCHIS" ~ "QUISPICANCHI",
-  name == "MARAÑON" ~ "MARANON",
-  name == "FERREÑAFE" ~ "FERRENAFE",
-  name == "DANIEL A. CARRION" ~ "DANIEL ALCIDES CARRION",
-  name == "DATEM DEL MARAÑON" ~ "DATEM DEL MARANON",
-  TRUE ~ name
+    name == "NAZCA"                          ~ "NASCA",
+    name == "CAÑETE"                         ~ "CANETE",
+    name == "SANCHEZ CERRO"                  ~ "GENERAL SANCHEZ CERRO",
+    name == "DANIEL CARRION"                 ~ "DANIEL ALCIDES CARRION",
+    name == "CUZCO"                          ~ "CUSCO",
+    name == "QUISPICANCHIS"                  ~ "QUISPICANCHI",
+    name == "MARAÑON"                        ~ "MARANON",
+    name == "FERREÑAFE"                      ~ "FERRENAFE",
+    name == "DANIEL A. CARRION"              ~ "DANIEL ALCIDES CARRION",
+    name == "DATEM DEL MARAÑON"              ~ "DATEM DEL MARANON",
+    name == "SAN ISIDRO DE MAYNO"            ~ "SAN ISIDRO DE MAINO",
+    name == "IMASA"                          ~ "IMAZA",
+    name == "PIZUQUIA"                       ~ "PISUQUIA",
+    name == "SAN CRISTOBAL DE OLTO"          ~ "SAN CRISTOBAL",
+    name == "SAN JERONIMO DE PACLAS"         ~ "SAN JERONIMO",
+    name == "ABELARDO PARDO LAZAMETA"        ~ "ABELARDO PARDO LEZAMETA",
+    name == "MATACOTA"                       ~ "MATACOTO",
+    name == "SAN MIGUEL CHACCRAMPA"          ~ "SAN MIGUEL DE CHACCRAMPA",
+    name == "HUAYLLO"                        ~ "HUAYO",
+    name == "QUEQUE¥A"                       ~ "QUEQUENA",
+    name == "HUAC"                           ~ "HUAC HUAS",
+    name == "SAN FRANCISCO DE RAVACAYCO"     ~ "SAN FRANCISCO DE RIVACAYCO",
+    name == "HUAYA"                          ~ "HUALLA",
+    name == "LOS BA¥OS DEL INCA"             ~ "LOS BANOS DEL INCA",
+    name == "ACOSTAMBAO"                     ~ "ACOSTAMBO",
+    name == "DANIEL HERNANDES"               ~ "DANIEL HERNANDEZ",
+    name == "YAHUIMPUQUIO"                   ~ "NAHUIMPUQUIO",
+    name == "SAN MARCOS ROCCHAC"             ~ "SAN MARCOS DE ROCCHAC",
+    name == "TINGUINA"                       ~ "LA TINGUINA",
+    name == "LEONOR ORDO¥EZ"                 ~ "LEONOR ORDONEZ",
+    name == "PAMPA HERMOZA"                  ~ "PAMPA HERMOSA",
+    name == "HUAY"                           ~ "HUAY HUAY",
+    name == "AYAUCA"                         ~ "ALLAUCA",
+    name == "VILCHAYAL"                      ~ "VICHAYAL",
+    name == "CAPASO"                         ~ "CAPAZO",
+    name == "HUANAHUARA"                     ~ "HUANUARA",
+    name == "CHUCATAMANI"                    ~ "HEROES ALBARRACIN",
+    name == "QUIMBIRI"                       ~ "KIMBIRI",
+    name == "CRESPO Y CASTILLO"              ~ "JOSE CRESPO Y CASTILLO",
+    name == "CODO DE POZUZO"                 ~ "CODO DEL POZUZO",
+    name == "CHUPAN"                         ~ "APARICIO POMARES",
+    name == "SAN FRANCISCO DEL YESO"         ~ "SAN FRANCISCO DE YESO",
+    name == "MACHAHUAY"                      ~ "MACHAGUAY",
+    name == "PACAPAUZA"                      ~ "PACAPAUSA",
+    name == "CCORCCA"                        ~ "CCORCA",
+    name == "PACCARECTAMBO"                  ~ "PACCARICTAMBO",
+    name == "KCOSNIPATA"                     ~ "KOSNIPATA",
+    name == "KICHKI"                         ~ "QUISQUI",
+    name == "ZANA"                           ~ "SANA",
+    name == "KANARIS"                        ~ "CANARIS",
+    name == "FUNDICION DE TINYAHUARCO"       ~ "TINYAHUARCO",
+    name == "HUATTA"                         ~ "HUATA",
+    name == "SAN JOSE DE LOS CHORRILLOS"     ~ "CUENCA",
+    name == "TAPAYRIHUA"                     ~ "TAPAIRIHUA",
+    name == "PACAICASA"                      ~ "PACAYCASA",
+    name == "ECHARATI"                       ~ "ECHARATE",
+    name == "ANDRES AVELINO CACERES DORREGAY"~ "ANDRES AVELINO CACERES DORREGARAY",
+    name == "EL ARENAL"                      ~ "ARENAL",
+    name == "JALCA GRANDE"                   ~ "LA JALCA",
+    name == "CASTA"                          ~ "SAN PEDRO DE CASTA",
+    name == "SAN PEDRO DE LARAOS"            ~ "LARAOS",
+    name == "PEVAS"                          ~ "PEBAS",
+    name == "PACCARICTAMBO"                  ~ "PACCARITAMBO",
+    name == "LIMA METROPOLITANA"             ~ "LIMA",
+    TRUE                                     ~ name
   ))
 
-
-Transferencias_Municipales <- Transferencias_Municipales %>% 
-  mutate(name = case_when(
-    name == "NAZCA" ~ "NASCA",
-    name == "CAÑETE" ~ "CANETE",
-    name == "SANCHEZ CERRO" ~ "GENERAL SANCHEZ CERRO",
-    name == "DANIEL CARRION" ~ "DANIEL ALCIDES CARRION",
-    name == "CUZCO" ~ "CUSCO",
-    name == "QUISPICANCHIS" ~ "QUISPICANCHI",
-    name == "MARAÑON" ~ "MARANON",
-    name == "FERREÑAFE" ~ "FERRENAFE",
-    name == "DANIEL A. CARRION" ~ "DANIEL ALCIDES CARRION",
-    name == "DATEM DEL MARAÑON" ~ "DATEM DEL MARANON",
-    name == "SAN ISIDRO DE MAYNO" ~ "SAN ISIDRO DE MAINO",
-    name == "IMASA" ~ "IMAZA",
-    name == "PIZUQUIA" ~ "PISUQUIA",
-    name == "SAN CRISTOBAL DE OLTO" ~ "SAN CRISTOBAL",
-    name == "SAN JERONIMO DE PACLAS" ~ "SAN JERONIMO",
-    name == "ABELARDO PARDO LAZAMETA" ~ "ABELARDO PARDO LEZAMETA",
-    name == "MATACOTA" ~ "MATACOTO",
-    name == "SAN MIGUEL CHACCRAMPA" ~ "SAN MIGUEL DE CHACCRAMPA",
-    name == "HUAYLLO" ~ "HUAYO",
-    name == "QUEQUE¥A" ~ "QUEQUENA",
-    name == "HUAC" ~ "HUAC HUAS",
-    name == "SAN FRANCISCO DE RAVACAYCO" ~ "SAN FRANCISCO DE RIVACAYCO",
-    name == "HUAYA" ~ "HUALLA",
-    name == "LOS BA¥OS DEL INCA" ~ "LOS BANOS DEL INCA",
-    name == "ACOSTAMBAO" ~ "ACOSTAMBO",
-    name == "DANIEL HERNANDES" ~ "DANIEL HERNANDEZ",
-    name == "YAHUIMPUQUIO" ~ "NAHUIMPUQUIO",
-    name == "SAN MARCOS ROCCHAC" ~ "SAN MARCOS DE ROCCHAC",
-    name == "TINGUINA" ~ "LA TINGUINA",
-    name == "LEONOR ORDO¥EZ" ~ "LEONOR ORDONEZ",
-    name == "PAMPA HERMOZA" ~ "PAMPA HERMOSA",
-    name == "HUAY" ~ "HUAY HUAY",
-    name == "AYAUCA" ~ "ALLAUCA",
-    name == "VILCHAYAL" ~ "VICHAYAL",
-    name == "CAPASO" ~ "CAPAZO",
-    name == "HUANAHUARA" ~ "HUANUARA",
-    name == "CHUCATAMANI" ~ "HEROES ALBARRACIN",
-    name == "QUIMBIRI" ~ "KIMBIRI",
-    name == "CRESPO Y CASTILLO" ~ "JOSE CRESPO Y CASTILLO",
-    name == "CODO DE POZUZO" ~ "CODO DEL POZUZO",
-    name == "CHUPAN" ~ "APARICIO POMARES",
-    name == "SAN FRANCISCO DEL YESO" ~ "SAN FRANCISCO DE YESO",
-    name == "MACHAHUAY" ~ "MACHAGUAY",
-    name == "PACAPAUZA" ~ "PACAPAUSA",
-    name == "CCORCCA" ~ "CCORCA",
-    name == "PACCARECTAMBO" ~ "PACCARICTAMBO",
-    name == "KCOSNIPATA" ~ "KOSNIPATA",
-    name == "KICHKI" ~ "QUISQUI",
-    name == "ZANA" ~ "SANA",
-    name == "KANARIS" ~ "CANARIS",
-    name == "FUNDICION DE TINYAHUARCO" ~ "TINYAHUARCO",
-    name == "HUATTA" ~ "HUATA",
-    name == "SAN JOSE DE LOS CHORRILLOS" ~ "CUENCA",
-    name == "TAPAYRIHUA" ~ "TAPAIRIHUA",
-    name == "PACAICASA" ~ "PACAYCASA",
-    name == "ECHARATI" ~ "ECHARATE",
-    name == "ANDRES AVELINO CACERES DORREGAY" ~ "ANDRES AVELINO CACERES DORREGARAY",
-    name == "EL ARENAL" ~ "ARENAL",
-    name == "JALCA GRANDE" ~ "LA JALCA",
-    name == "CASTA" ~ "SAN PEDRO DE CASTA",
-    name == "SAN PEDRO DE LARAOS" ~ "LARAOS",
-    name == "PEVAS" ~ "PEBAS",
-    name == "PACCARICTAMBO" ~ "PACCARITAMBO",
-    name == "NAZCA" ~ "NASCA",
-    name == "CAÑETE" ~ "CANETE",
-    name == "SANCHEZ CERRO" ~ "GENERAL SANCHEZ CERRO",
-    name == "DANIEL CARRION" ~ "DANIEL ALCIDES CARRION",
-    name == "CUZCO" ~ "CUSCO",
-    name == "QUISPICANCHIS" ~ "QUISPICANCHI",
-    name == "MARAÑON" ~ "MARANON",
-    name == "FERREÑAFE" ~ "FERRENAFE",
-    name == "DANIEL A. CARRION" ~ "DANIEL ALCIDES CARRION",
-    name == "DATEM DEL MARAÑON" ~ "DATEM DEL MARANON",
-    name == "LIMA METROPOLITANA" ~ "LIMA",
-    TRUE ~ name
-  ))
-
-
-Transferencias_Municipales <- Transferencias_Municipales %>% 
+# ---- Municipales: paso 8 — correcciones de province -------------------------
+Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(province = case_when(
-    province == "CASCAS" ~ "GRAN CHIMU",
-    province == "HUACHO" ~ "HUAURA",
-    province == "SAN JOSE DE SISA" ~ "EL DORADO",
-    province == "CALLAO" ~ "PROV. CONST. DEL CALLAO",
-    province == "NAZCA" ~ "NASCA",
-    province == "CAÑETE" ~ "CANETE",
-    province == "SANCHEZ CERRO" ~ "GENERAL SANCHEZ CERRO",
-    province == "DANIEL CARRION" ~ "DANIEL ALCIDES CARRION",
-    province == "CUZCO" ~ "CUSCO",
-    province == "QUISPICANCHIS" ~ "QUISPICANCHI",
-    province == "MARAÑON" ~ "MARANON",
-    province == "FERREÑAFE" ~ "FERRENAFE",
-    province == "DANIEL A. CARRION" ~ "DANIEL ALCIDES CARRION",
-    province == "DATEM DEL MARAÑON" ~ "DATEM DEL MARANON",
-    TRUE ~ province
+    province == "CASCAS"                ~ "GRAN CHIMU",
+    province == "HUACHO"                ~ "HUAURA",
+    province == "SAN JOSE DE SISA"      ~ "EL DORADO",
+    province == "CALLAO"                ~ "PROV. CONST. DEL CALLAO",
+    province == "NAZCA"                 ~ "NASCA",
+    province == "CAÑETE"                ~ "CANETE",
+    province == "SANCHEZ CERRO"         ~ "GENERAL SANCHEZ CERRO",
+    province == "DANIEL CARRION"        ~ "DANIEL ALCIDES CARRION",
+    province == "CUZCO"                 ~ "CUSCO",
+    province == "QUISPICANCHIS"         ~ "QUISPICANCHI",
+    province == "MARAÑON"               ~ "MARANON",
+    province == "FERREÑAFE"             ~ "FERRENAFE",
+    province == "DANIEL A. CARRION"     ~ "DANIEL ALCIDES CARRION",
+    province == "DATEM DEL MARAÑON"     ~ "DATEM DEL MARANON",
+    TRUE                                ~ province
   ))
 
-
+# ---- Municipales: paso 9 — correcciones por código y capital provincial -----
 Transferencias_Municipales <- Transferencias_Municipales %>%
   mutate(
-    province_exists = province %in% unique(Mapa_Distrito$PROVINCIA)
+    code = as.character(code),
+    year = as.integer(year),
+    name = case_when(
+      code == "01-301371" ~ "HUACHO",
+      code == "03-300939" ~ "MOLINO",
+      code == "06-300022" ~ "BAGUA",
+      code == "07-300292" ~ "IHUAYLLO",
+      TRUE                ~ name
+    ),
+    province = case_when(
+      code == "02-301128"                 ~ "TRUJILLO",
+      code == "06-301764" & year == 2015L ~ "SAN MARTIN",
+      code == "18-301069" & year == 2015L ~ "JAUJA",
+      TRUE                               ~ province
+    ),
+    name = str_squish(str_remove(name, "\\s*\\([^)]+\\)")),
+    name = case_when(
+      province == "CARLOS FERMIN FITZCARRALD" & name == "CARLOS FERMIN FITZCARRALD" ~ "SAN LUIS",
+      province == "SAN ANTONIO DE PUTINA"     & name == "SAN ANTONIO DE PUTINA"     ~ "PUTINA",
+      province == "HUAMANGA"                  & name == "HUAMANGA"                  ~ "AYACUCHO",
+      province == "CONTRALMIRANTE VILLAR"     & name == "CONTRALMIRANTE VILLAR"     ~ "ZORRITOS",
+      province == "CORONEL PORTILLO"          & name == "CORONEL PORTILLO"          ~ "CALLERIA",
+      province == "DATEM DEL MARANON"         & name == "DATEM DEL MARANON"         ~ "BARRANCA",
+      province == "MARISCAL RAMON CASTILLA"   & name == "MARISCAL RAMON CASTILLA"   ~ "RAMON CASTILLA",
+      name == "VITARTE"                                                              ~ "ATE",
+      name == "AGUAITIA"                                                             ~ "AGUAYTIA",
+      province == "LUCANAS" & name == "HUAS"                                        ~ "HUAC HUAS",
+      TRUE                                                                           ~ name
+    )
   )
 
-any(!Transferencias_Municipales$province_exists) #Ahora todas las municipalidades coinciden con su provincia
+# ---- Municipales: paso 10 — pares manuales ----------------------------------
+manual_pairs <- tribble(
+  ~province_from,  ~name_from,     ~province_to,      ~name_to,
+  "PUTUMAYO",      "SAN ANTONIO",  "MARISCAL NIETO",  "SAN ANTONIO",
+  "HUARAZ",        "PAMPAS",       "HUARAZ",          "PAMPAS GRANDE",
+  "PUTUMAYO",      "SAN MIGUEL",   "SAN ROMAN",       "SAN MIGUEL",
+  "ZARUMILLA",     "SAN MIGUEL",   "SAN ROMAN",       "SAN MIGUEL",
+  "PUTUMAYO",      "EL PORVENIR",  "CHINCHEROS",      "EL PORVENIR",
+  "TARATA",        "PAMPAS",       "HUARAZ",          "PAMPAS",
+  "PUTUMAYO",      "NINABAMBA",    "LA MAR",          "NINABAMBA",
+  "HUANUCO",       "QUISQUI",      "HUANUCO",         "QUISQUI (KICHKI)",
+  "ZARUMILLA",     "PUEBLO NUEVO", "LEONCIO PRADO",   "PUEBLO NUEVO",
+  "ZARUMILLA",     "EL PORVENIR",  "CHINCHEROS",      "EL PORVENIR",
+  "PUTUMAYO",      "COCHABAMBA",   "TAYACAJA",        "COCHABAMBA",
+  "PUTUMAYO",      "PUEBLO NUEVO", "LEONCIO PRADO",   "PUEBLO NUEVO",
+  "PUTUMAYO",      "SANTA LUCIA",  "TOCACHE",         "SANTA LUCIA",
+  "TARATA",        "EL PORVENIR",  "CHINCHEROS",      "EL PORVENIR",
+  "TARATA",        "QUISQUI",      "TARATA",          "QUISQUI (KICHKI)",
+  "PADRE ABAD",    "AGUAYTIA",     "PADRE ABAD",      "PADRE ABAD"
+)
 
 Transferencias_Municipales <- Transferencias_Municipales %>%
-  select(-province_exists)
+  left_join(manual_pairs, by = c("province" = "province_from", "name" = "name_from")) %>%
+  mutate(
+    province = coalesce(province_to, province),
+    name     = coalesce(name_to,     name)
+  ) %>%
+  select(-province_to, -name_to)
+
+# ---- Validación -------------------------------------------------------------
+Transferencias_Municipales <- Transferencias_Municipales %>%
+  mutate(province_exists = province %in% unique(Mapa_Distrito$PROVINCIA))
+any(!Transferencias_Municipales$province_exists)
+Transferencias_Municipales <- Transferencias_Municipales %>% select(-province_exists)
+
+# ---- Transferencias_Provinciales: construir DESPUÉS de todas las correcciones
+# Hereda province limpio automáticamente — no necesita correcciones separadas.
+Transferencias_Provinciales <- Transferencias_Municipales %>%
+  group_by(province, year) %>%
+  summarise(
+    authorised = sum(authorised, na.rm = TRUE),
+    credited   = sum(credited,   na.rm = TRUE),
+    .groups    = "drop"
+  ) %>%
+  rename(name = province)
 
 ###Export data###
-write.csv(Transferencias_Municipales, "./tesis_canon/Data/Transferencias_Municipales.csv",
-          row.names = FALSE)
 saveRDS(Transferencias_Municipales,  "./tesis_canon/Data/Transferencias_Municipales.rds")
-
-write.csv(Transferencias_Provinciales, "./tesis_canon/Data/Transferencias_Provinciales.csv",
-          row.names = FALSE)
-saveRDS(Transferencias_Provinciales,  "./tesis_canon/Data/Transferencias_Provinciales.rds")
-
-write.csv(Transferencias_Regionales, "./tesis_canon/Data/Transferencias_Regionales.csv",
-          row.names = FALSE)
-saveRDS(Transferencias_Regionales,  "./tesis_canon/Data/Transferencias_Regionales.rds")
+saveRDS(Transferencias_Provinciales, "./tesis_canon/Data/Transferencias_Provinciales.rds")
+saveRDS(Transferencias_Regionales,   "./tesis_canon/Data/Transferencias_Regionales.rds")
 
 ###Visualizing###
 
@@ -755,7 +778,7 @@ ggplot(Mapa_Distrito) +
   theme_minimal()
 
 
-length(setdiff(Mapa_Distrito$DISTRITO_UPPER, Distritos_Mineros)) #Existen 27 distritos no mineros
+length(setdiff(Mapa_Distrito$DISTRITO_UPPER, Distritos_Mineros)) #Existen 0 distritos no mineros
 
 Distritos_Full <- Transferencias_Municipales %>% 
   group_by(name) %>% 
