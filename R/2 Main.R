@@ -16,6 +16,7 @@ library(purrr)
 library(haven)
 library(fs)
 library(janitor)
+library(ivmodel)
 
 # Clean up workspace
 rm(list = ls())
@@ -673,134 +674,256 @@ Panel %>%
 
 
 # ==============================================================================
-# ---- Parte 5. Variables de Tratamiento ---------------------------------------
+# ---- Deflactores de precios --------------------------------------------------
 # ==============================================================================
 
-# ---- 5.1 Indicadores DiD ----------------------------------------------------
+# ---- Peru CPI: construido desde LINPE de ENAHO (canasta base INEI) ----------
+# LINPE = línea de pobreza mensual per cápita en soles nominales
+# Ratio LINPE_t / LINPE_2010 = deflactor implícito de precios al consumidor
 
-ever_treated_tab <- Panel %>%
-  group_by(ubigeo6) %>%
-  summarise(ever_treated = as.integer(any(treated == 1)), .groups = "drop")
-
-first_treat_tab <- Panel %>%
-  filter(treated == 1) %>%
-  group_by(ubigeo6) %>%
-  summarise(first_treat_year = min(year), .groups = "drop")
-
-Panel <- Panel %>%
-  left_join(ever_treated_tab, by = "ubigeo6") %>%
-  left_join(first_treat_tab,  by = "ubigeo6") %>%
-  mutate(
-    time_to_treat = if_else(!is.na(first_treat_year),
-                            as.integer(year - first_treat_year),
-                            NA_integer_)
+linpe_deflator <- ENAHO_sumaria %>%
+  mutate(year = as.integer(AÑO)) %>%
+  group_by(year) %>%
+  summarise(
+    linpe_nac = weighted.mean(LINPE * 12, FACTOR07, na.rm = TRUE),  # anualizar
+    .groups   = "drop"
   )
 
-# ---- 5.2 Instrumento Bartik (Shift-Share) -----------------------------------
-# Lógica: Z_{d,t} = Σ_m  share_{d,m,pre} × (P_{m,t} / P_{m,pre})
-# - share_{d,m,pre}: fracción del revenue de Concentración en el pre-período
-#   que corresponde al mineral m en el distrito d
-# - P_{m,t} / P_{m,pre}: índice de precio internacional (= 1 en período base)
-# Pre-período: 2004–2006 (tres primeros años, antes del boom minero)
+linpe_2010 <- linpe_deflator %>%
+  filter(year == 2010) %>%
+  pull(linpe_nac)
+
+linpe_deflator <- linpe_deflator %>%
+  mutate(cpi_peru = linpe_nac / linpe_2010)   # 1.0 en 2010
+
+# Verificar
+print(linpe_deflator)
+
+# ---- US CPI: BLS CPI-U, base 2010 = 1.0 ------------------------------------
+# Fuente: BLS CPI-U All Items, annual average. Verificar en bls.gov.
+us_cpi <- tibble(
+  year   = 2004:2024,
+  cpi_us = c(0.881, 0.912, 0.940, 0.969, 1.005, 0.999,
+             1.000, 1.032, 1.053, 1.068, 1.086, 1.087,
+             1.101, 1.124, 1.152, 1.172, 1.187, 1.243,
+             1.342, 1.405, 1.451)
+)
+
+# ==============================================================================
+# ---- Aplicar deflactores al Panel -------------------------------------------
+# ==============================================================================
+
+Panel <- Panel %>%
+  left_join(linpe_deflator %>% select(year, cpi_peru), by = "year") %>%
+  left_join(us_cpi,                                    by = "year") %>%
+  mutate(
+    # --- Canon: soles nominales → USD reales 2010 ----------------------------
+    # Paso 1: soles nominales → USD nominales (÷ tipo de cambio anual)
+    # Paso 2: USD nominales → USD reales 2010 (÷ US CPI)
+    canon_credited_rusd = (canon_credited_mpen / pen_usd) / cpi_us,
+    canon_auth_rusd     = (canon_auth_mpen     / pen_usd) / cpi_us,
+    
+    # --- ENAHO: soles nominales → soles reales 2010 -------------------------
+    inghog2d_real = inghog2d_mean / cpi_peru,
+    ingbruhd_real = ingbruhd_mean / cpi_peru,
+    gashog2d_real = gashog2d_mean / cpi_peru,
+    
+    # --- Log variables reales (para regresión) -------------------------------
+    log_canon_r   = log(canon_credited_rusd + 1),
+    log_ingreso_r = log(inghog2d_real       + 1),
+    log_gasto_r   = log(gashog2d_real       + 1)
+  )
+
+# ---- QA: verificar deflactores ----------------------------------------------
+cat("=== CPI Peru (2010 = 1.0) ===\n")
+Panel %>%
+  distinct(year, cpi_peru) %>%
+  arrange(year) %>%
+  print(n = 25)
+
+cat("\n=== Estadísticas Canon real (USD 2010) ===\n")
+Panel %>%
+  filter(canon_credited_rusd > 0) %>%
+  summarise(
+    n       = n(),
+    mean    = mean(canon_credited_rusd),
+    median  = median(canon_credited_rusd),
+    p90     = quantile(canon_credited_rusd, 0.9),
+    max     = max(canon_credited_rusd)
+  ) %>% print()
+
+cat("\n=== Ingreso real vs nominal (2010) ===\n")
+Panel %>%
+  filter(year == 2010, !is.na(inghog2d_mean)) %>%
+  summarise(
+    ingreso_nominal = mean(inghog2d_mean),
+    ingreso_real    = mean(inghog2d_real)
+  ) %>% print()  # Deberían ser iguales en 2010
+
+
+# ==============================================================================
+# ---- 5. Instrumento Bartik y Regresión IV ------------------------------------
+# ==============================================================================
 
 pre_years <- 2004:2006
 
-# Precio base por mineral (promedio 2004–2006)
+# ---- 5.1 Índice de precios internacionales (base = promedio 2004–2006) -------
 price_base <- All_Prices_long %>%
   filter(year %in% pre_years) %>%
   group_by(mineral) %>%
   summarise(price_base = mean(price, na.rm = TRUE), .groups = "drop")
 
-# Índice de precio: P_{m,t} / P_{m,pre}
 price_index <- All_Prices_long %>%
   mutate(year = as.integer(year)) %>%
   left_join(price_base, by = "mineral") %>%
   mutate(price_idx = price / price_base) %>%
   select(year, mineral, price_idx)
 
-# Shares pre-período por distrito × mineral (Concentración únicamente)
-shares_pre <- Mining_Site %>%
-  filter(ETAPA == "Concentración", year %in% pre_years) %>%
-  group_by(ubigeo6, mineral) %>%
-  summarise(revenue_pre = sum(revenue_usd, na.rm = TRUE), .groups = "drop") %>%
-  group_by(ubigeo6) %>%
-  mutate(share_pre = revenue_pre / sum(revenue_pre)) %>%
-  ungroup() %>%
-  select(ubigeo6, mineral, share_pre)
+# ---- 5.2 Shares pre-período a nivel regional --------------------------------
+# Canon distribuye 40% a toda la región → instrumento cubre todos los
+# distritos de regiones mineras, no solo los productores directos.
 
-# Bartik: cross de shares × índice de precios → agregar por distrito-año
-Bartik <- shares_pre %>%
-  left_join(price_index, by = "mineral") %>%   # expande a todos los años
+ubigeo_geo <- Ubigeo_Master %>%
+  distinct(ubigeo6, cod_region)
+
+shares_reg <- Mining_Site %>%
+  filter(ETAPA == "Concentración", year %in% pre_years) %>%
+  left_join(ubigeo_geo, by = "ubigeo6") %>%
+  group_by(cod_region, mineral) %>%
+  summarise(revenue_pre = sum(revenue_usd, na.rm = TRUE), .groups = "drop") %>%
+  group_by(cod_region) %>%
+  mutate(share_reg = revenue_pre / sum(revenue_pre)) %>%
+  ungroup() %>%
+  select(cod_region, mineral, share_reg)
+
+# ---- 5.3 Bartik = Σ_m share_{r,m,pre} × (P_{m,t} / P_{m,pre}) --------------
+Bartik <- ubigeo_geo %>%
+  left_join(shares_reg,  by = "cod_region",  relationship = "many-to-many") %>%
+  left_join(price_index, by = "mineral",     relationship = "many-to-many") %>%
   group_by(ubigeo6, year) %>%
   summarise(
-    bartik     = sum(share_pre * price_idx,       na.rm = TRUE),
-    log_bartik = sum(share_pre * log(price_idx),  na.rm = TRUE),
+    bartik     = sum(share_reg * price_idx,       na.rm = TRUE),
+    log_bartik = sum(share_reg * log(price_idx),  na.rm = TRUE),
     .groups    = "drop"
   )
 
-# QA Bartik
-cat("Distritos con Bartik:", n_distinct(Bartik$ubigeo6), "\n")
-cat("Celdas Bartik:", nrow(Bartik), "\n")
-summary(Bartik$bartik)
+cat("Regiones con shares:", n_distinct(shares_reg$cod_region), "\n")
+cat("Distritos con Bartik > 0:", sum(Bartik$bartik > 0), "\n")
 
-# Añadir al panel
 Panel <- Panel %>%
+  select(-any_of(c("bartik", "log_bartik"))) %>%
   left_join(Bartik, by = c("ubigeo6", "year"))
 
-# ---- 5.3 QA final antes de regresión ----------------------------------------
-cat("\n=== Muestra de regresión ===\n")
-panel_reg <- Panel %>% filter(enaho_reliable == 1)
-cat("Filas (ENAHO confiable):", nrow(panel_reg), "\n")
+# ---- 5.4 Muestra de regresión -----------------------------------------------
+panel_reg <- Panel %>%
+  filter(enaho_reliable == 1, !is.na(log_bartik), !is.na(log_ingreso_r))
+
+cat("Filas en muestra:", nrow(panel_reg), "\n")
 cat("Distritos:", n_distinct(panel_reg$ubigeo6), "\n")
-cat("Con Bartik:", sum(!is.na(panel_reg$bartik)), "\n")
-cat("NA en log_ingreso:", sum(is.na(panel_reg$log_ingreso)), "\n")
 
-
-# ==============================================================================
-# ---- Primera Regresión -------------------------------------------------------
-# ==============================================================================
-
-# ---- OLS-FE: baseline -------------------------------------------------------
-m1 <- feols(log_ingreso ~ log_canon | ubigeo6 + year,
+# ---- 5.5 Primer estadio -----------------------------------------------------
+fs <- feols(log_canon_r ~ log_bartik | ubigeo6 + year,
             data    = panel_reg,
             cluster = ~ubigeo6)
 
-# ---- OLS-FE: controlando por producción minera local ------------------------
-m2 <- feols(log_ingreso ~ log_canon + log_revenue | ubigeo6 + year,
-            data    = panel_reg,
-            cluster = ~ubigeo6)
+cat("\n=== Primer estadio ===\n")
+print(coeftable(fs))
+cat("F-stat instrumento:", fitstat(fs, "ivwald")[[1]], "\n")
 
-# ---- IV-Bartik --------------------------------------------------------------
-m3 <- feols(log_ingreso ~ 1 | ubigeo6 + year | log_canon ~ log_bartik,
-            data    = panel_reg %>% filter(!is.na(log_bartik)),
-            cluster = ~ubigeo6)
+# ---- 5.6 Regresiones IV (2SLS-TWFE) ----------------------------------------
+m_ingreso <- feols(log_ingreso_r ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik,
+                   data    = panel_reg,
+                   cluster = ~ubigeo6)
 
-# ---- IV-Bartik + control producción ----------------------------------------
-m4 <- feols(log_ingreso ~ log_revenue | ubigeo6 + year | log_canon ~ log_bartik,
-            data    = panel_reg %>% filter(!is.na(log_bartik)),
-            cluster = ~ubigeo6)
+m_gasto   <- feols(log_gasto_r   ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik,
+                   data    = panel_reg,
+                   cluster = ~ubigeo6)
 
-# ---- Resultados -------------------------------------------------------------
-etable(m1, m2, m3, m4,
-       se.below   = TRUE,
-       keep       = c("log_canon", "log_revenue"),
-       dict       = c(log_canon   = "log Canon (credited)",
-                      log_revenue = "log Mining revenue (USD)"),
-       fitstat    = ~ r2 + n + ivwald)
+m_pobre   <- feols(pct_pobre     ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik,
+                   data    = panel_reg,
+                   cluster = ~ubigeo6)
 
-
-
+# ---- 5.7 Tabla ---------------------------------------------------------------
+etable(m_ingreso, m_gasto, m_pobre,
+       se.below  = TRUE,
+       keep_raw  = "fit_log_canon_r",
+       headers   = c("log Income", "log Expenditure", "Poverty Rate"),
+       fitstat   = ~ r2 + n + ivwald)
 
 
+# ---- Bartik con rezago de 1 y 2 años ----------------------------------------
+# Canon año t ≈ basado en precios año t-2 (procesamiento MEF ~2 años)
+
+panel_reg <- panel_reg %>%
+  arrange(ubigeo6, year) %>%
+  group_by(ubigeo6) %>%
+  mutate(
+    log_bartik_l1 = lag(log_bartik, 1),
+    log_bartik_l2 = lag(log_bartik, 2)
+  ) %>%
+  ungroup()
+
+# Primer estadio con L1
+fs_l1 <- feols(log_canon_r ~ log_bartik_l1 | ubigeo6 + year,
+               data = panel_reg %>% filter(!is.na(log_bartik_l1)),
+               cluster = ~ubigeo6)
+
+# Primer estadio con L2
+fs_l2 <- feols(log_canon_r ~ log_bartik_l2 | ubigeo6 + year,
+               data = panel_reg %>% filter(!is.na(log_bartik_l2)),
+               cluster = ~ubigeo6)
+
+cat("=== Primer estadio L1 ===\n")
+print(coeftable(fs_l1))
+cat("F-stat L1:", fitstat(fs_l1, "ivwald")[[1]], "\n\n")
+
+cat("=== Primer estadio L2 ===\n")
+print(coeftable(fs_l2))
+cat("F-stat L2:", fitstat(fs_l2, "ivwald")[[1]], "\n")
 
 
+# ==============================================================================
+# ---- 5.8 Regresión IV con instrumento rezagado (L1) -------------------------
+# ==============================================================================
+# Justificación L1: Canon año t ≈ función de tributos mineros año t-1, que a su
+# vez reflejan precios año t-1. Bartik contemporáneo falla (F=0.33);
+# Bartik(t-1) tiene relevancia estadística fuerte (F≈26.5).
 
+# Errores estándar clusterizados a NIVEL REGIONAL (Adão, Kolesár & Morales 2019)
+# porque los shares se construyen al nivel de region, no de distrito.
+# Esto es más conservador que clusterizar solo a nivel de distrito.
 
+panel_iv <- panel_reg %>% filter(!is.na(log_bartik_l1))
 
+# IV con instrumento L1, cluster doble (ubigeo6 + cod_region)
+m_iv_ingreso <- feols(
+  log_ingreso_r ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik_l1,
+  data    = panel_iv,
+  cluster = ~ ubigeo6 + cod_region
+)
 
+m_iv_gasto <- feols(
+  log_gasto_r   ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik_l1,
+  data    = panel_iv,
+  cluster = ~ ubigeo6 + cod_region
+)
 
+m_iv_pobre <- feols(
+  pct_pobre     ~ 1 | ubigeo6 + year | log_canon_r ~ log_bartik_l1,
+  data    = panel_iv,
+  cluster = ~ ubigeo6 + cod_region
+)
 
+# Diagnóstico: F-stat del primer estadio (ahora con sintaxis IV correcta)
+cat("=== Primer estadio (sintaxis IV) ===\n")
+print(summary(m_iv_ingreso, stage = 1))
 
+cat("\n=== Tabla resultados IV ===\n")
+etable(m_iv_ingreso, m_iv_gasto, m_iv_pobre,
+       se.below  = TRUE,
+       keep_raw  = "fit_log_canon_r",
+       headers   = c("log Income", "log Expenditure", "Poverty Rate"),
+       fitstat   = ~ r2 + n + ivf1 + ivwald)
 
 
 
