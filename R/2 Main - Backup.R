@@ -46,16 +46,19 @@ pre_years  <- 2004:2006
 gini_weighted <- function(x, w) {
   ok <- !is.na(x) & !is.na(w) & w > 0 & x >= 0
   if (sum(ok) < 2) return(NA_real_)
-  x <- x[ok]; w <- w[ok]
-  ord <- order(x); x <- x[ord]; w <- w[ord]
-  W  <- sum(w); XW <- sum(x * w)
+  x <- x[ok]; w <- w[ok]  # Elimina hogares con ingreso o peso faltante, 
+                          # peso cero, o ingreso negativo. Si quedan menos de 2
+                          # hogares válidos, devuelve NA (no se puede calcular Gini)
+  ord <- order(x); x <- x[ord]; w <- w[ord] # Ordenar por ingreso de menor a mayor
+                                            # Para Lorenz-Kurve
+  W  <- sum(w); XW <- sum(x * w)  # W normaliza la distribución de población
+                                  # y XW normaliza la distribución de ingreso
   if (W == 0 || XW == 0) return(NA_real_)
-  cw  <- cumsum(w) / W
-  cxw <- cumsum(x * w) / XW
+  cw  <- cumsum(w) / W  # fracción acumulada de población (eje X)
+  cxw <- cumsum(x * w) / XW   # # fracción acumulada de ingreso (eje Y)
   area <- sum(diff(c(0, cw)) * (c(0, cxw[-length(cxw)]) + cxw) / 2)
   1 - 2 * area
 } # Survey-weighted Gini coefficient via Lorenz-curve trapezoidal rule
-
 
 
 ##################################
@@ -94,6 +97,7 @@ Ubigeo_Distrito <- read_rds("./Data/ubigeo_distrito.rds")
 ### Mining Site with Prices ###
 
 Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
+Mining_Site <- read_rds("./Data/Mining_Site.rds")
 
 
 ### All Mineral Prices ###
@@ -101,7 +105,7 @@ Mining_Site_long <- read_rds("./Data/Mining_Site_long.rds")
 All_Prices_long <- read_rds("./Data/All_Prices_long.rds")
 
 # ==============================================================================
-# ---- 0. JOIN DATA: Ubigeo matching — Transferencias --------------------------
+# ---- JOIN DATA: Ubigeo matching — Transferencias ----------------------------
 # ==============================================================================
 
 # ---- Ubigeo_Master (base compartida por los tres matches) -------------------
@@ -123,67 +127,8 @@ stopifnot(
   sum(nchar(Ubigeo_Master$ubigeo6) != 6)  == 0
 )
 
-
 # ==============================================================================
-# ---- 1. Deflactores ----------------------------------------------------------
-# ==============================================================================
-
-# ---- 6.1 Peru CPI desde LINPE (base 2010 = 1) ------------------------------
-linpe_deflator <- ENAHO_sumaria %>%
-  mutate(year = as.integer(AÑO)) %>%
-  group_by(year) %>%
-  summarise(
-    linpe_nac = weighted.mean(LINPE * 12, FACTOR07, na.rm = TRUE),
-    .groups   = "drop"
-  )
-
-linpe_2010 <- linpe_deflator %>% filter(year == 2010) %>% pull(linpe_nac)
-linpe_deflator <- linpe_deflator %>% mutate(cpi_peru = linpe_nac / linpe_2010)
-
-# ---- 6.2 US CPI (BLS CPI-U, base 2010 = 1) ---------------------------------
-us_cpi <- tibble(
-  year   = 2004:2024,
-  cpi_us = c(0.881, 0.912, 0.940, 0.969, 1.005, 0.999,
-             1.000, 1.032, 1.053, 1.068, 1.086, 1.087,
-             1.101, 1.124, 1.152, 1.172, 1.187, 1.243,
-             1.342, 1.405, 1.451)
-)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ==============================================================================
-# ---- 2. Transferencias_Municipales → ubigeo6 (3 pasos) -----------------------
+# ---- 1. Transferencias_Municipales → ubigeo6 (3 pasos) ----------------------
 # ==============================================================================
 
 transf_keys <- Transferencias_Municipales %>%
@@ -191,6 +136,7 @@ transf_keys <- Transferencias_Municipales %>%
   mutate(
     code          = as.character(code),
     year          = as.integer(year),
+    region_std     = normalizar_texto(depto),
     provincia_std = normalizar_texto(province),
     distrito_std  = normalizar_texto(name)
   )
@@ -198,8 +144,8 @@ transf_keys <- Transferencias_Municipales %>%
 # Paso 1 — match fuerte (provincia, distrito)
 m1 <- transf_keys %>%
   left_join(
-    Ubigeo_Master %>% select(ubigeo6, provincia_std, distrito_std),
-    by = c("provincia_std", "distrito_std")
+    Ubigeo_Master %>% select(ubigeo6, region_std, provincia_std, distrito_std),
+    by = c("region_std", "provincia_std", "distrito_std")
   ) %>%
   mutate(match_method = if_else(!is.na(ubigeo6), "prov_dist", NA_character_))
 
@@ -244,8 +190,9 @@ m3 <- m2 %>%
   select(-ubigeo6_code) %>%
   left_join(
     Ubigeo_Master %>% select(ubigeo6,
+                             region_real = region_std,
                              provincia_real = provincia_std,
-                             depto_real     = depto_std),
+                             distrito_real     = distrito_std),
     by = "ubigeo6"
   )
 
@@ -256,8 +203,9 @@ Transferencias_Municipales <- m3 %>%
     credited,
     authorised,
     code,
+    region_real,
     provincia_real,
-    depto_real,
+    distrito_real,
     distrito_raw  = name,
     provincia_raw = province,
     match_method
@@ -306,20 +254,23 @@ Transferencias_Regionales %>%
 # ==============================================================================
 
 prov_lookup <- Ubigeo_Master %>%
-  distinct(cod_provincia, provincia_std, depto_std)
+  distinct(cod_provincia, provincia_std, region_std)
 
-# Detectar homónimos antes del join (si los hay, el join creará filas dobles)
 prov_dupes <- prov_lookup %>% count(provincia_std) %>% filter(n > 1)
 
 Transferencias_Provinciales <- Transferencias_Provinciales %>%
-  select(-any_of(c("cod_provincia", "depto_std", "match_method"))) %>%
-  mutate(prov_std_clean = normalizar_texto(name)) %>%
+  select(-any_of(c("cod_provincia", "region_std_clean", "match_method"))) %>%
+  mutate(
+    prov_std_clean   = normalizar_texto(name),
+    region_std_clean = normalizar_texto(depto)   # viene de Import.R
+  ) %>%
   left_join(
-    prov_lookup %>% select(cod_provincia, provincia_std, depto_std),
-    by = c("prov_std_clean" = "provincia_std")
+    prov_lookup,
+    by = c("prov_std_clean" = "provincia_std",
+           "region_std_clean" = "region_std")    # doble clave elimina homónimos
   ) %>%
   mutate(
-    match_method = if_else(!is.na(cod_provincia), "name_match", "unmatched")
+    match_method = if_else(!is.na(cod_provincia), "name_region_match", "unmatched")
   )
 
 # ==============================================================================
@@ -357,9 +308,9 @@ cat("Unicidad Municipal: OK\n")
 # Consistencia temporal por departamento
 district_coverage <- Transferencias_Municipales %>%
   filter(match_method != "unmatched") %>%
-  group_by(depto_real, year) %>%
+  group_by(region_real, year) %>%
   summarise(n_districts = n_distinct(ubigeo6), .groups = "drop") %>%
-  group_by(depto_real) %>%
+  group_by(region_real) %>%
   mutate(
     median_n      = median(n_districts),
     pct_of_median = n_districts / median_n
@@ -427,13 +378,13 @@ if (nrow(dup_prov_panel) > 0) {
 # ---- Guardar ----------------------------------------------------------------
 # ==============================================================================
 
-saveRDS(Transferencias_Municipales,  "./Data/Transferencias_Municipales.rds")
-saveRDS(Transferencias_Regionales,   "./Data/Transferencias_Regionales.rds")
-saveRDS(Transferencias_Provinciales, "./Data/Transferencias_Provinciales.rds")
+#saveRDS(Transferencias_Municipales,  "./Data/Transferencias_Municipales.rds")
+#saveRDS(Transferencias_Regionales,   "./Data/Transferencias_Regionales.rds")
+#saveRDS(Transferencias_Provinciales, "./Data/Transferencias_Provinciales.rds")
 
-cat("\nGuardado — Municipal:", nrow(Transferencias_Municipales), "filas\n")
-cat("Guardado — Regional:",  nrow(Transferencias_Regionales),  "filas\n")
-cat("Guardado — Provincial:", nrow(Transferencias_Provinciales), "filas\n")
+#cat("\nGuardado — Municipal:", nrow(Transferencias_Municipales), "filas\n")
+#cat("Guardado — Regional:",  nrow(Transferencias_Regionales),  "filas\n")
+  cat("Guardado — Provincial:", nrow(Transferencias_Provinciales), "filas\n")
 
 
 # ==============================================================================
@@ -680,6 +631,7 @@ ENAHO_panel <- ENAHO_sumaria %>%
     gashog2d_mean = weighted.mean(GASHOG2D,  FACTOR07, na.rm = TRUE),
     pct_pobre     = weighted.mean(POBREZA == 1, FACTOR07, na.rm = TRUE),
     pct_pobre_ext = weighted.mean(POBREZA == 2, FACTOR07, na.rm = TRUE),
+    gini          = gini_weighted(INGHOG2D, FACTOR07),
     .groups = "drop"
   )
 
@@ -716,7 +668,7 @@ Panel <- expand_grid(
 ) %>%
   left_join(
     Ubigeo_Master %>%
-      select(ubigeo6, region_std, depto_std, provincia_std, distrito_std,
+      select(ubigeo6, region_std, region_std, provincia_std, distrito_std,
              cod_region, cod_provincia),
     by = "ubigeo6"
   ) %>%
@@ -738,29 +690,54 @@ Panel <- expand_grid(
 # ==============================================================================
 
 # ---- 6.1 Peru CPI desde LINPE (base 2010 = 1) ------------------------------
-linpe_deflator <- ENAHO_sumaria %>%
-  mutate(year = as.integer(AÑO)) %>%
+# El archivo BCRP contiene VARIACIONES PORCENTUALES anuales fin de período.
+# Convertimos a niveles via producto cumulado y normalizamos a 2010 = 1.
+
+ipc_bcrp_raw <- read_excel(
+  "./Data/IPC BCRP 02-24.xlsx",
+  sheet = "Anuales",
+  skip = 2,
+  col_names = c("year", "variacion_pct")
+) %>%
+  filter(!is.na(year)) %>%
+  mutate(year = as.integer(year),
+         variacion_pct = as.numeric(variacion_pct))
+
+peru_cpi <- ipc_bcrp_raw %>%
+  arrange(year) %>%
+  mutate(factor    = 1 + variacion_pct / 100,
+         cpi_level = cumprod(factor)) %>%
+  mutate(cpi_peru = cpi_level / cpi_level[year == 2010]) %>%
+  filter(year %in% full_years) %>%
+  select(year, cpi_peru)
+
+saveRDS(peru_cpi,  "./Data/peru_cpi.rds")
+
+
+# ---- 6.2 US CPI desde FRED (CPIAUCNS mensual → anual, base 2010 = 1) ---------
+us_cpi <- read_csv(
+  "./Data/CPI US.csv",
+  show_col_types = FALSE
+) %>%
+  rename(date = observation_date, cpi_monthly = CPIAUCNS) %>%
+  mutate(year = as.integer(format(date, "%Y"))) %>%
   group_by(year) %>%
-  summarise(
-    linpe_nac = weighted.mean(LINPE * 12, FACTOR07, na.rm = TRUE),
-    .groups   = "drop"
-  )
+  summarise(cpi_annual = mean(cpi_monthly, na.rm = TRUE), .groups = "drop") %>%
+  filter(year %in% full_years) %>%
+  mutate(cpi_us = cpi_annual / cpi_annual[year == 2010]) %>%
+  select(year, cpi_us)
 
-linpe_2010 <- linpe_deflator %>% filter(year == 2010) %>% pull(linpe_nac)
-linpe_deflator <- linpe_deflator %>% mutate(cpi_peru = linpe_nac / linpe_2010)
-
-# ---- 6.2 US CPI (BLS CPI-U, base 2010 = 1) ---------------------------------
-us_cpi <- tibble(
-  year   = 2004:2024,
-  cpi_us = c(0.881, 0.912, 0.940, 0.969, 1.005, 0.999,
-             1.000, 1.032, 1.053, 1.068, 1.086, 1.087,
-             1.101, 1.124, 1.152, 1.172, 1.187, 1.243,
-             1.342, 1.405, 1.451)
+stopifnot(
+  abs(peru_cpi$cpi_peru[peru_cpi$year == 2010] - 1) < 1e-10,
+  abs(us_cpi$cpi_us[us_cpi$year == 2010] - 1) < 1e-10
 )
+
+saveRDS(us_cpi,  "./Data/us_cpi.rds")
+
 
 # ---- 6.3 Aplicar al panel --------------------------------------------------
 Panel <- Panel %>%
-  left_join(linpe_deflator %>% select(year, cpi_peru), by = "year") %>%
+  left_join(peru_cpi %>% select(year, cpi_peru), by = "year") %>%
   left_join(us_cpi,                                    by = "year") %>%
   mutate(
     canon_credited_rusd = (canon_credited_mpen / pen_usd) / cpi_us,
@@ -817,7 +794,12 @@ Panel <- Panel %>%
   select(-any_of(c("bartik", "log_bartik"))) %>%
   left_join(Bartik, by = c("ubigeo6", "year"))
 
-# ---- 7.3 Canon simulado (principal) ----------------------------------------
+# ---- 7.3 Canon simulado (principal) — ACUMULACIÓN POR CANALES -------------
+# Por Ley 27506 un distrito puede acumular hasta tres canales:
+#   Productor:  10% directo + 25% provincial + 40% regional
+#   Provincial: 25% provincial + 40% regional
+#   Regional:   solo 40% regional
+
 mineros_directos <- Mining_Site %>%
   filter(ETAPA == "Concentración") %>%
   distinct(ubigeo6) %>% pull(ubigeo6)

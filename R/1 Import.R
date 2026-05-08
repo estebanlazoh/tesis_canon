@@ -235,6 +235,7 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
 
 Mapa_Distrito <- Mapa_Distrito %>%
   mutate(
+    REGION    = str_squish(stri_trans_general(str_to_upper(REGION),    "Latin-ASCII")),
     PROVINCIA = str_squish(stri_trans_general(str_to_upper(PROVINCIA), "Latin-ASCII")),
     DISTRITO  = str_squish(stri_trans_general(str_to_upper(DISTRITO),  "Latin-ASCII"))
   )
@@ -398,10 +399,21 @@ Transferencias_Municipales <- Transferencias_Municipales %>%
 any(!Transferencias_Municipales$province_exists)
 Transferencias_Municipales <- Transferencias_Municipales %>% select(-province_exists)
 
-# ---- Transferencias_Provinciales: construir DESPUÉS de todas las correcciones
-# Hereda province limpio automáticamente — no necesita correcciones separadas.
+# ---- Adjuntar departamento desde Mapa_Distrito ------------------------------
+# (province, name) -> REGION via Mapa_Distrito limpio (PROVINCIA, DISTRITO)
+depto_lookup <- Mapa_Distrito %>%
+  sf::st_drop_geometry() %>%
+  mutate(DISTRITO_NORM = str_squish(str_remove(DISTRITO, "\\s*\\([^)]+\\)"))) %>%
+  distinct(PROVINCIA, DISTRITO, REGION)
+
+Transferencias_Municipales <- Transferencias_Municipales %>%
+  left_join(depto_lookup,
+            by = c("province" = "PROVINCIA", "name" = "DISTRITO")) %>%
+  rename(depto = REGION)
+
+# ---- Transferencias_Provinciales: hereda province y depto -------------------
 Transferencias_Provinciales <- Transferencias_Municipales %>%
-  group_by(province, year) %>%
+  group_by(depto, province, year) %>%
   summarise(
     authorised = sum(authorised, na.rm = TRUE),
     credited   = sum(credited,   na.rm = TRUE),
