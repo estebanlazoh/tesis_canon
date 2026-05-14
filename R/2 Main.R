@@ -603,8 +603,8 @@ ENAHO_panel <- ENAHO_sumaria %>%
     ingbruhd_mean  = weighted.mean(INGBRUHD,  FACTOR07, na.rm = TRUE),
     inghog2d_mean  = weighted.mean(INGHOG2D,  FACTOR07, na.rm = TRUE),
     gashog2d_mean  = weighted.mean(GASHOG2D,  FACTOR07, na.rm = TRUE),
-    pct_pobre      = weighted.mean(POBREZA == 1, FACTOR07, na.rm = TRUE),
-    pct_pobre_ext  = weighted.mean(POBREZA == 2, FACTOR07, na.rm = TRUE),
+    pct_pobre_ext  = weighted.mean(POBREZA == 1, FACTOR07, na.rm = TRUE),
+    pct_pobre      = weighted.mean(POBREZA == 2, FACTOR07, na.rm = TRUE),
     gini           = gini_weighted(INGHOG2D, FACTOR07),
     tam_hogar_mean = weighted.mean(MIEPERHO, FACTOR07, na.rm = TRUE),
     pop_proxy      = sum(FACTOR07 * MIEPERHO, na.rm = TRUE),
@@ -629,6 +629,7 @@ hh_weights <- ENAHO_sumaria %>%
     HOGAR_int = as.integer(HOGAR)
   ) %>%
   select(CONGLOME, VIVIENDA, HOGAR_int, year, FACTOR07)
+
 
 # ---- 5.1c Educación (ENAHO_300) → pct_sin_educ -----------------------------
 # P301A: nivel educativo (1 = sin nivel; 2-11 = inicial a postgrado).
@@ -735,6 +736,54 @@ ENAHO_mig <- ENAHO_200 %>%
             .groups = "drop")
 cat("  Celdas pct_migrante no-NA:", nrow(ENAHO_mig), "\n")
 
+
+ENAHO_mig <- ENAHO_200 %>%
+  
+  transmute(
+    ubigeo6   = pad6(UBIGEO),
+    year      = as.integer(AÑO),
+    CONGLOME  = as.integer(CONGLOME),
+    VIVIENDA  = as.integer(VIVIENDA),
+    HOGAR_int = as.integer(HOGAR),
+    
+    P204   = as.numeric(haven::zap_labels(P204)),
+    P208A1 = as.numeric(haven::zap_labels(P208A1))
+  ) %>%
+  
+  filter(
+    ubigeo6 %in% Ubigeo_Master$ubigeo6,
+    P204 == 1
+  ) %>%
+  
+  left_join(
+    hh_weights,
+    by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")
+  ) %>%
+  
+  filter(!is.na(FACTOR07)) %>%
+  
+  mutate(
+    migrante = as.integer(P208A1 == 0)
+  ) %>%
+  
+  group_by(ubigeo6, year) %>%
+  
+  summarise(
+    pct_migrante = weighted.mean(
+      migrante,
+      FACTOR07,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+cat(
+  "Celdas pct_migrante:",
+  nrow(ENAHO_mig),
+  "\n"
+)
+
+
 # ---- 5.1f Empleo minero + transferencias públicas (ENAHO_500) --------------
 # P506: código CIIU del sector.
 #   CIIU rev 3 (hasta ~2009): minas/canteras = 10-14 (2 dígitos)
@@ -756,7 +805,7 @@ ENAHO_emp <- ENAHO_500 %>%
       empleado == 1 & !is.na(p506_code) &
         (p506_code %in% 10:14 | p506_code %in% 5:9)
     ),
-    recibe_transf = as.integer(!is.na(P5566A) & P5566A == 1)
+      recibe_transf = as.integer(!is.na(P5566A) & P5566A == 1)   # Transferencias del programa JUNTOS
   ) %>%
   left_join(hh_weights, by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")) %>%
   filter(ubigeo6 %in% Ubigeo_Master$ubigeo6, !is.na(FACTOR07)) %>%
