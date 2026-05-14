@@ -403,12 +403,14 @@ Transferencias_Municipales <- Transferencias_Municipales %>% select(-province_ex
 # (province, name) -> REGION via Mapa_Distrito limpio (PROVINCIA, DISTRITO)
 depto_lookup <- Mapa_Distrito %>%
   sf::st_drop_geometry() %>%
-  mutate(DISTRITO_NORM = str_squish(str_remove(DISTRITO, "\\s*\\([^)]+\\)"))) %>%
-  distinct(PROVINCIA, DISTRITO, REGION)
+  mutate(DISTRITO_NORM = str_squish(str_remove(DISTRITO, "\\s*\\([^)]+\\)")),
+        REGION = normalizar_texto(REGION),
+  ) %>%
+  distinct(PROVINCIA, DISTRITO_NORM, REGION)
 
 Transferencias_Municipales <- Transferencias_Municipales %>%
   left_join(depto_lookup,
-            by = c("province" = "PROVINCIA", "name" = "DISTRITO")) %>%
+            by = c("province" = "PROVINCIA", "name" = "DISTRITO_NORM")) %>%
   rename(depto = REGION)
 
 # ---- Transferencias_Provinciales: hereda province y depto -------------------
