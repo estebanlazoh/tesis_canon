@@ -25,7 +25,9 @@ getwd()
 setwd("C:/Users/esteb/OneDrive/Documents/Esteban/Berlin/General/MA LA Studien/Masterarbeit/tesis_canon/")
 
 
-# Funciones de ayuda
+# ==============================================================================
+# FUNCIONES DE UTILIDAD
+# ==============================================================================
 
 normalizar_texto <- function(x) {
   x %>%
@@ -60,6 +62,17 @@ gini_weighted <- function(x, w) {
   1 - 2 * area
 } # Survey-weighted Gini coefficient via Lorenz-curve trapezoidal rule
 
+# Winsorización simétrica al percentil p
+winsor <- function(x, p = 0.01) {
+  q <- quantile(x, c(p, 1 - p), na.rm = TRUE)
+  pmax(pmin(x, q[2]), q[1])
+}
+
+# Desencola haven_labelled de forma segura para comparaciones numéricas
+unlab_local <- function(x) {
+  if (inherits(x, "haven_labelled")) as.numeric(haven::zap_labels(x))
+  else as.numeric(x)
+}
 
 ##################################
 ###         Load Data          ###
@@ -622,13 +635,14 @@ ENAHO_panel <- ENAHO_sumaria %>%
 # Normaliza a as.integer() para que los joins funcionen independientemente de
 # si la fuente es character o numeric.
 hh_weights <- ENAHO_sumaria %>%
-  mutate(
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR)
-  ) %>%
-  select(CONGLOME, VIVIENDA, HOGAR_int, year, FACTOR07)
+  transmute(
+    hh_key  = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                    as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    FACTOR07
+  )
+cat("hh_weights:", nrow(hh_weights), "filas | claves únicas:",
+    n_distinct(hh_weights$hh_key), "\n")
+
 
 
 # ---- 5.1c Educación (ENAHO_300) → pct_sin_educ -----------------------------
@@ -639,18 +653,20 @@ hh_weights <- ENAHO_sumaria %>%
 # ponderado de personas sin educación en el distrito.
 ENAHO_edu <- ENAHO_300 %>%
   mutate(
-    ubigeo6   = pad6(UBIGEO),
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR),
-    sin_educ  = as.integer(!is.na(P301A) & P301A <= 1)
+    ubigeo6  = pad6(UBIGEO),
+    year     = as.integer(AÑO),
+    hh_key   = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                     as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    sin_educ = as.integer(!is.na(P301A) & as.numeric(P301A) <= 1)
   ) %>%
-  left_join(hh_weights, by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")) %>%
+  left_join(hh_weights, by = "hh_key") %>%
   filter(ubigeo6 %in% Ubigeo_Master$ubigeo6, !is.na(FACTOR07)) %>%
   group_by(ubigeo6, year) %>%
   summarise(pct_sin_educ = weighted.mean(sin_educ, FACTOR07, na.rm = TRUE),
             .groups = "drop")
+cat("ENAHO_edu:", nrow(ENAHO_edu), "celdas pct_sin_educ | media:",
+    round(mean(ENAHO_edu$pct_sin_educ, na.rm = TRUE), 3), "\n")
+
 
 # ---- 5.1d NBI (ENAHO_100) → pct_nbi y desagregados -------------------------
 # NBI1: vivienda inadecuada; NBI2: hacinamiento; NBI3: sin servicios higiénicos;
@@ -662,29 +678,32 @@ ENAHO_edu <- ENAHO_300 %>%
 # INEI. nbi_any = 1 si el hogar tiene al menos una NBI.
 ENAHO_nbi <- ENAHO_100 %>%
   mutate(
-    ubigeo6   = pad6(UBIGEO),
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR),
-    nbi_any   = as.integer(
-      (!is.na(NBI1) & NBI1 == 1) | (!is.na(NBI2) & NBI2 == 1) |
-        (!is.na(NBI3) & NBI3 == 1) | (!is.na(NBI4) & NBI4 == 1) |
-        (!is.na(NBI5) & NBI5 == 1)
+    ubigeo6 = pad6(UBIGEO),
+    year    = as.integer(AÑO),
+    hh_key  = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                    as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    nbi_any = as.integer(
+      (!is.na(NBI1) & as.numeric(NBI1) == 1) |
+        (!is.na(NBI2) & as.numeric(NBI2) == 1) |
+        (!is.na(NBI3) & as.numeric(NBI3) == 1) |
+        (!is.na(NBI4) & as.numeric(NBI4) == 1) |
+        (!is.na(NBI5) & as.numeric(NBI5) == 1)
     )
   ) %>%
-  left_join(hh_weights, by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")) %>%
+  left_join(hh_weights, by = "hh_key") %>%
   filter(ubigeo6 %in% Ubigeo_Master$ubigeo6, !is.na(FACTOR07)) %>%
   group_by(ubigeo6, year) %>%
   summarise(
-    pct_nbi      = weighted.mean(nbi_any,      FACTOR07, na.rm = TRUE),
-    pct_nbi1_viv = weighted.mean(NBI1 == 1,    FACTOR07, na.rm = TRUE),
-    pct_nbi2_hac = weighted.mean(NBI2 == 1,    FACTOR07, na.rm = TRUE),
-    pct_nbi3_sss = weighted.mean(NBI3 == 1,    FACTOR07, na.rm = TRUE),
-    pct_nbi4_edu = weighted.mean(NBI4 == 1,    FACTOR07, na.rm = TRUE),
-    pct_nbi5_dep = weighted.mean(NBI5 == 1,    FACTOR07, na.rm = TRUE),
+    pct_nbi      = weighted.mean(nbi_any,             FACTOR07, na.rm = TRUE),
+    pct_nbi1_viv = weighted.mean(as.numeric(NBI1)==1, FACTOR07, na.rm = TRUE),
+    pct_nbi2_hac = weighted.mean(as.numeric(NBI2)==1, FACTOR07, na.rm = TRUE),
+    pct_nbi3_sss = weighted.mean(as.numeric(NBI3)==1, FACTOR07, na.rm = TRUE),
+    pct_nbi4_edu = weighted.mean(as.numeric(NBI4)==1, FACTOR07, na.rm = TRUE),
+    pct_nbi5_dep = weighted.mean(as.numeric(NBI5)==1, FACTOR07, na.rm = TRUE),
     .groups = "drop"
   )
+cat("ENAHO_nbi:", nrow(ENAHO_nbi), "celdas pct_nbi | media:",
+    round(mean(ENAHO_nbi$pct_nbi, na.rm = TRUE), 3), "\n")
 
 # ---- 5.1e Migración (ENAHO_200) → pct_migrante -----------------------------
 # P208A1: 1 = nació en este distrito, 2 = nació en otro (migrante).
@@ -692,39 +711,28 @@ ENAHO_nbi <- ENAHO_100 %>%
 # P206 se OMITE: encoding 1=Sí ausente / 2=No ausente — filtrar P206==1
 # dejaba solo los ausentes y producía pct_migrante=0.
 # unlab_local(): zap_labels para comparaciones numéricas seguras con haven_labelled.
-unlab_local <- function(x) {
-  if (inherits(x, "haven_labelled")) as.numeric(haven::zap_labels(x))
-  else as.numeric(x)
-}
-
-has_p208a1       <- "P208A1"   %in% names(ENAHO_200)
-has_p207         <- "P207"     %in% names(ENAHO_200)
-has_factor07_200 <- "FACTOR07" %in% names(ENAHO_200)
-has_p204         <- "P204"     %in% names(ENAHO_200)
-cat("=== Diagnóstico ENAHO_200 (migración) ===\n",
-    "  P208A1:", has_p208a1, "| P207:", has_p207,
-    "| FACTOR07:", has_factor07_200, "| P204:", has_p204, "\n",
-    "  Cols P20x:", paste(grep("^P20", names(ENAHO_200), value=TRUE), collapse=", "), "\n")
+has_p208a1 <- "P208A1" %in% names(ENAHO_200)
+has_p207   <- "P207"   %in% names(ENAHO_200)
+has_p204   <- "P204"   %in% names(ENAHO_200)
+cat("=== ENAHO_200: P208A1=", has_p208a1, "| P207=", has_p207,
+    "| P204=", has_p204, "\n")
 
 ENAHO_mig <- ENAHO_200 %>%
   mutate(
-    ubigeo6   = pad6(UBIGEO),
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR)
+    ubigeo6 = pad6(UBIGEO),
+    year    = as.integer(AÑO),
+    hh_key  = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                    as.integer(HOGAR),    as.integer(AÑO), sep = "_")
   ) %>%
   filter(ubigeo6 %in% Ubigeo_Master$ubigeo6) %>%
-  { if (!has_factor07_200)
-    left_join(., hh_weights, by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year"))
-    else . } %>%
+  left_join(hh_weights, by = "hh_key") %>%
   filter(!is.na(FACTOR07)) %>%
-  { if (has_p204) filter(., unlab_local(P204) == 1) else . } %>%
+  { if (has_p204) filter(., as.numeric(P204) == 1) else . } %>%
   mutate(
     migrante = if (has_p208a1) {
-      as.integer(unlab_local(P208A1) == 2)
+      as.integer(as.numeric(P208A1) == 0)      # 0 = nació fuera = migrante
     } else if (has_p207) {
-      depto_nac    <- suppressWarnings(as.integer(unlab_local(P207)))
+      depto_nac    <- suppressWarnings(as.integer(as.numeric(P207)))
       depto_ubigeo <- suppressWarnings(as.integer(substr(ubigeo6, 1, 2)))
       as.integer(!is.na(depto_nac) & depto_nac >= 1 & depto_nac <= 25 &
                    depto_nac != depto_ubigeo)
@@ -734,55 +742,49 @@ ENAHO_mig <- ENAHO_200 %>%
   group_by(ubigeo6, year) %>%
   summarise(pct_migrante = weighted.mean(migrante, FACTOR07, na.rm = TRUE),
             .groups = "drop")
-cat("  Celdas pct_migrante no-NA:", nrow(ENAHO_mig), "\n")
+cat("ENAHO_mig:", nrow(ENAHO_mig), "celdas | media pct_migrante:",
+    round(mean(ENAHO_mig$pct_migrante, na.rm = TRUE), 3), "\n")
 
 
-ENAHO_mig <- ENAHO_200 %>%
-  
-  transmute(
-    ubigeo6   = pad6(UBIGEO),
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR),
-    
-    P204   = as.numeric(haven::zap_labels(P204)),
-    P208A1 = as.numeric(haven::zap_labels(P208A1))
-  ) %>%
-  
-  filter(
-    ubigeo6 %in% Ubigeo_Master$ubigeo6,
-    P204 == 1
-  ) %>%
-  
-  left_join(
-    hh_weights,
-    by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")
-  ) %>%
-  
-  filter(!is.na(FACTOR07)) %>%
-  
+# Los distritos sin cobertura ENAHO en módulo 200 (42.5%) reciben el promedio
+# ponderado de su provincia; si la provincia tampoco tiene datos, el de la región.
+mig_prov <- ENAHO_200 %>%
   mutate(
-    migrante = as.integer(P208A1 == 0)
+    cod_provincia = paste0(substr(pad6(UBIGEO), 1, 4), "00"),  # "0101" → "010100"
+    year   = as.integer(AÑO),
+    hh_key = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                   as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    migrante = if (has_p208a1) as.integer(as.numeric(P208A1) == 0) else NA_integer_
   ) %>%
-  
-  group_by(ubigeo6, year) %>%
-  
+  left_join(hh_weights, by = "hh_key") %>%
+  filter(!is.na(FACTOR07), !is.na(migrante)) %>%
+  { if (has_p204) filter(., as.numeric(P204) == 1) else . } %>%
+  group_by(cod_provincia, year) %>%
   summarise(
-    pct_migrante = weighted.mean(
-      migrante,
-      FACTOR07,
-      na.rm = TRUE
-    ),
+    pct_migrante_prov = weighted.mean(migrante, FACTOR07, na.rm = TRUE),
+    n_obs_prov        = n(),
     .groups = "drop"
   )
 
-cat(
-  "Celdas pct_migrante:",
-  nrow(ENAHO_mig),
-  "\n"
-)
+mig_reg <- ENAHO_200 %>%
+  mutate(
+    cod_region = paste0(substr(pad6(UBIGEO), 1, 2), "0000"),   # "01" → "010000"
+    year   = as.integer(AÑO),
+    hh_key = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                   as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    migrante = if (has_p208a1) as.integer(as.numeric(P208A1) == 0) else NA_integer_
+  ) %>%
+  left_join(hh_weights, by = "hh_key") %>%
+  filter(!is.na(FACTOR07), !is.na(migrante)) %>%
+  { if (has_p204) filter(., as.numeric(P204) == 1) else . } %>%
+  group_by(cod_region, year) %>%
+  summarise(
+    pct_migrante_reg = weighted.mean(migrante, FACTOR07, na.rm = TRUE),
+    .groups = "drop"
+  )
 
+cat("mig_prov:", nrow(mig_prov), "celdas prov-año\n")
+cat("mig_reg:",  nrow(mig_reg),  "celdas reg-año\n")
 
 # ---- 5.1f Empleo minero + transferencias públicas (ENAHO_500) --------------
 # P506: código CIIU del sector.
@@ -792,22 +794,24 @@ cat(
 # P5566A: receptor de otras transferencias institucionales (Juntos, Pensión 65, etc.)
 ENAHO_emp <- ENAHO_500 %>%
   mutate(
-    ubigeo6   = pad6(UBIGEO),
-    year      = as.integer(AÑO),
-    CONGLOME  = as.integer(CONGLOME),
-    VIVIENDA  = as.integer(VIVIENDA),
-    HOGAR_int = as.integer(HOGAR),
-    p506_code = as.integer(
+    ubigeo6      = pad6(UBIGEO),
+    year         = as.integer(AÑO),
+    hh_key       = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                         as.integer(HOGAR),    as.integer(AÑO), sep = "_"),
+    p506_code    = as.integer(
       substr(str_pad(as.character(as.integer(P506)), 4, "left", "0"), 1, 2)
     ),
-    empleado  = as.integer((!is.na(P501) & P501 == 1) | (!is.na(P502) & P502 == 1)),
-    emp_minero = as.integer(
+    empleado     = as.integer(
+      (!is.na(P501) & as.numeric(P501) == 1) |
+        (!is.na(P502) & as.numeric(P502) == 1)
+    ),
+    emp_minero   = as.integer(
       empleado == 1 & !is.na(p506_code) &
         (p506_code %in% 10:14 | p506_code %in% 5:9)
     ),
-      recibe_transf = as.integer(!is.na(P5566A) & P5566A == 1)   # Transferencias del programa JUNTOS
+    recibe_transf = as.integer(!is.na(P5566A) & as.numeric(P5566A) == 1)
   ) %>%
-  left_join(hh_weights, by = c("CONGLOME", "VIVIENDA", "HOGAR_int", "year")) %>%
+  left_join(hh_weights, by = "hh_key") %>%
   filter(ubigeo6 %in% Ubigeo_Master$ubigeo6, !is.na(FACTOR07)) %>%
   group_by(ubigeo6, year) %>%
   summarise(
@@ -815,6 +819,11 @@ ENAHO_emp <- ENAHO_500 %>%
     pct_transf_publ = weighted.mean(recibe_transf, FACTOR07, na.rm = TRUE),
     .groups = "drop"
   )
+
+cat("ENAHO_emp:", nrow(ENAHO_emp), "celdas | media emp_minero:",
+    round(mean(ENAHO_emp$pct_emp_minero, na.rm = TRUE), 3),
+    "| media transf:", round(mean(ENAHO_emp$pct_transf_publ, na.rm = TRUE), 3), "\n")
+
 
 # ---- 5.1g Consolidar todos los controles en ENAHO_panel --------------------
 ENAHO_panel <- ENAHO_panel %>%
@@ -884,6 +893,24 @@ Panel <- expand_grid(
     mining_district     = as.integer(revenue_conc_usd    > 0),  # ¿hubo extracción minera este año?
     enaho_reliable      = as.integer(!is.na(n_hogares) & n_hogares >= 10)
   )
+
+# ── Imputar pct_migrante con fallback provincial/regional ───────────────────
+# Fuente 1: pct_migrante distrital (join ENAHO_mig, 57.5% cobertura)
+# Fuente 2: pct_migrante_prov (promedio provincial del año, ~98% cobertura)
+# Fuente 3: pct_migrante_reg  (promedio regional del año, ~100% cobertura)
+Panel <- Panel %>%
+  left_join(mig_prov %>% select(cod_provincia, year, pct_migrante_prov),
+            by = c("cod_provincia", "year")) %>%
+  left_join(mig_reg  %>% select(cod_region,    year, pct_migrante_reg),
+            by = c("cod_region",    "year")) %>%
+  mutate(
+    pct_migrante_imp = coalesce(pct_migrante, pct_migrante_prov, pct_migrante_reg)
+  ) %>%
+  select(-pct_migrante_prov, -pct_migrante_reg)
+
+cat("pct_migrante (distrital):    ", sum(!is.na(Panel$pct_migrante)),     "celdas\n")
+cat("pct_migrante_imp (imputada): ", sum(!is.na(Panel$pct_migrante_imp)), "celdas\n")
+
 
 # QA rápido
 cat("Filas ENAHO_panel:", nrow(ENAHO_panel), "\n")
@@ -1130,24 +1157,22 @@ canon_simulado <- canon_simulado %>%
   ) %>%
   ungroup()
 
-# Placebo: canon simulado del año SIGUIENTE
-# Pregunta: ¿el canon que Áncash va a recibir el año que viene ya está prediciendo
-# el ingreso de los hogares de Áncash este año?
-
-# Si la respuesta es SÍ (β significativo) → hay un problema de identificación.
-# Significa que los distritos que van a crecer en canon ya están creciendo en
-# ingreso antes de recibirlo. Esto indicaría que la relación no es causal sino
-# que ambas variables responden a algún factor común previo (pre-trend).
-
-# Si la respuesta es NO (β ≈ 0, n.s.) → el instrumento no está prediciendo
-# outcomes antes de actuar. La identificación es válida.
+# QA: distribución del instrumento
+cat("\n=== Distribución del instrumento (canon simulado) ===\n")
+cat(sprintf("  Distritos en canon_simulado: %d\n",  n_distinct(canon_simulado$ubigeo6)))
+cat(sprintf("  Filas totales:               %d\n",  nrow(canon_simulado)))
+cat(sprintf("  log_canon_sim == 0:          %d (%.1f%%)\n",
+            sum(canon_simulado$log_canon_sim == 0, na.rm = TRUE),
+            100 * mean(canon_simulado$log_canon_sim == 0, na.rm = TRUE)))
 
 
 # ==============================================================================
 # ---- 8. Muestras de regresión -----------------------------------------------
 # ==============================================================================
+
+# ---- 8.A Muestra principal (umbral ≥10 hogares ENAHO) -----------------------
 panel_base <- Panel %>%
-  filter(enaho_reliable == 1) %>%   # solo celulas con ≥10 hogares ENAHO
+  filter(enaho_reliable == 1) %>%
   arrange(ubigeo6, year) %>%
   left_join(
     canon_simulado %>%
@@ -1156,8 +1181,61 @@ panel_base <- Panel %>%
     by = c("ubigeo6", "year")
   )
 
-panel_sim <- panel_base %>%
-  filter(!is.na(log_canon_sim_l1), !is.na(log_ingreso_r))
+# ---- 8.B Muestra extendida (umbral ≥5 hogares ENAHO) -------------------------
+# Robustez: verifica que el umbral de confiabilidad ENAHO no sesgue los resultados.
+# Se usará en Sección 12.I. El umbral estándar (10 hogares) es más conservador
+# pero descarta el 49% de las obs con instrumento válido.
+panel_base_5h <- Panel %>%
+  filter(!is.na(n_hogares) & n_hogares >= 5) %>%
+  arrange(ubigeo6, year) %>%
+  left_join(
+    canon_simulado %>%
+      select(ubigeo6, year, log_canon_sim_l1, log_canon_sim_l2,
+             log_canon_sim_f1, log_canon_sim_f2),
+    by = c("ubigeo6", "year")
+  )
+
+# ---- QA: embudo de filtros panel_sim ----------------------------------------
+cat("\n=== Embudo de muestra panel_sim ===\n")
+panel_base_full <- Panel %>%
+  left_join(
+    canon_simulado %>% select(ubigeo6, year, log_canon_sim_l1, log_canon_sim_l2, log_canon_sim_f1),
+    by = c("ubigeo6", "year")
+  )
+
+qa_step <- function(df, label) {
+  cat(sprintf("  %-50s %6d obs  |  %4d distritos\n",
+              label, nrow(df), n_distinct(df$ubigeo6)))
+  df
+}
+
+panel_base_full %>%
+  qa_step("Panel completo") %>%
+  filter(year >= 2007) %>%
+  qa_step("año >= 2007") %>%
+  filter(!is.na(log_ingreso_r)) %>%
+  qa_step("log_ingreso_r no-NA") %>%
+  filter(!is.na(log_canon_sim_l1)) %>%
+  qa_step("log_canon_sim_l1 no-NA") %>%
+  filter(enaho_reliable == 1) %>%
+  qa_step("enaho_reliable == 1 (≥10 hog)") -> panel_embudo
+
+panel_base_full %>%
+  filter(year >= 2007,
+         !is.na(log_ingreso_r),
+         !is.na(log_canon_sim_l1),
+         !is.na(n_hogares) & n_hogares >= 5) %>%
+  nrow() %>%
+  { cat(sprintf("  %-50s %6d obs\n", "umbral ≥5 hogares (recuperable):", .)) }
+
+# ---- 8.C panel_sim (muestra principal de estimación) ------------------------
+panel_sim    <- panel_base    %>% filter(!is.na(log_canon_sim_l1), !is.na(log_ingreso_r))
+panel_sim_5h <- panel_base_5h %>% filter(!is.na(log_canon_sim_l1), !is.na(log_ingreso_r))
+
+cat(sprintf("\npanel_sim (≥10 hog): %d obs | %d distritos\n",
+            nrow(panel_sim),    n_distinct(panel_sim$ubigeo6)))
+cat(sprintf("panel_sim_5h (≥5):   %d obs | %d distritos\n",
+            nrow(panel_sim_5h), n_distinct(panel_sim_5h$ubigeo6)))
 
 
 # ==============================================================================
@@ -1188,195 +1266,248 @@ etable(m_rf_ingreso, m_rf_gasto, m_rf_pobre,
        fitstat = ~ r2 + n,
        title   = "Reduced Form: Simulated Canon → Outcomes")
 
-# ---- 10.B Vector adaptativo X_dt -------------------------------------------
-# Calcula cobertura de cada control en panel_sim. Excluye los que tienen
-# <1000 obs no-NA para evitar muestra vacía. ctrl_X_dt se reusa en 11.C-E.
-ctrl_X_full <- c("tam_hogar_mean", "log_pop_proxy", "pct_migrante",
-                 "pct_emp_minero", "pct_transf_publ", "pct_sin_educ")
-ctrl_cov    <- sapply(ctrl_X_full, function(v) sum(!is.na(panel_sim[[v]])))
-cat("=== Cobertura X_dt en panel_sim ===\n"); print(ctrl_cov)
+# ==============================================================================
+# ---- 10.B  Vectores de control — tres sets según cobertura ------------------
+# ==============================================================================
+# ctrl_X_5: 5 controles con cobertura ≥99.9% → muestra completa [ESPECIFICACIÓN PRINCIPAL]
+# ctrl_X_6: añade pct_migrante_imp (imputada a nivel provincial/regional)
+# ctrl_X_7: añade pct_nbi → especificación más rica
+# Todos los vectores son adaptativos: si un control no alcanza 1000 obs no-NA
+# en panel_sim, se excluye del conjunto para no colapsar la muestra.
 
-ctrl_X_dt   <- names(ctrl_cov[ctrl_cov >= 1000])
-ctrl_dropped <- setdiff(ctrl_X_full, ctrl_X_dt)
-if (length(ctrl_dropped) > 0)
-  cat("ATENCIÓN — controles excluidos por baja cobertura:",
-      paste(ctrl_dropped, collapse = ", "), "\n")
+ctrl_X_5_base <- c("tam_hogar_mean", "log_pop_proxy",
+                   "pct_emp_minero", "pct_transf_publ", "pct_sin_educ")
 
-panel_rf_Xdt <- panel_sim %>% filter(if_all(all_of(ctrl_X_dt), ~ !is.na(.)))
-cat("Muestra X_dt:", nrow(panel_rf_Xdt), "obs |",
-    n_distinct(panel_rf_Xdt$ubigeo6), "distritos\n")
+# Cobertura en panel_sim (muestra principal ≥10 hogares)
+ctrl_cov_5  <- sapply(ctrl_X_5_base, function(v) sum(!is.na(panel_sim[[v]])))
+cov_mig_imp <- sum(!is.na(panel_sim[["pct_migrante_imp"]]))
+cov_mig_raw <- sum(!is.na(panel_sim[["pct_migrante"]]))
+cov_nbi     <- sum(!is.na(panel_sim[["pct_nbi"]]))
 
-ctrl_str <- paste(ctrl_X_dt, collapse = " + ")
+cat("=== Cobertura controles en panel_sim ===\n")
+print(ctrl_cov_5)
+cat(sprintf("  pct_migrante (distrital):  %d (%.1f%%)\n",
+            cov_mig_raw, 100 * cov_mig_raw / nrow(panel_sim)))
+cat(sprintf("  pct_migrante_imp (imput.): %d (%.1f%%)\n",
+            cov_mig_imp, 100 * cov_mig_imp / nrow(panel_sim)))
+cat(sprintf("  pct_nbi:                   %d (%.1f%%)\n",
+            cov_nbi,     100 * cov_nbi     / nrow(panel_sim)))
 
-fml_rf <- function(y) as.formula(
-  paste(y, "~ log_canon_sim_l1 +", ctrl_str, "| ubigeo6 + year"))
-fml_iv <- function(y) as.formula(
-  paste(y, "~", ctrl_str, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1"))
+ctrl_X_5 <- ctrl_X_5_base
+ctrl_X_6 <- c(ctrl_X_5, if (cov_mig_imp >= 1000) "pct_migrante_imp")
+ctrl_X_7 <- c(ctrl_X_6, if (cov_nbi     >= 1000) "pct_nbi")
 
-m_rf_Xdt_ingreso <- feols(fml_rf("log_ingreso_r"), data = panel_rf_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_rf_Xdt_gasto   <- feols(fml_rf("log_gasto_r"),   data = panel_rf_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_rf_Xdt_pobre   <- feols(fml_rf("pct_pobre"),     data = panel_rf_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
+ctrl_X_dt <- ctrl_X_5        # backward-compat alias
+ctrl_str  <- paste(ctrl_X_5, collapse = " + ")
+str5      <- paste(ctrl_X_5, collapse = " + ")
+str6      <- paste(ctrl_X_6, collapse = " + ")
+str7      <- paste(ctrl_X_7, collapse = " + ")
 
-# ---- 10.C Con X_dt + NBI ---------------------------------------------------
-ctrl_X_dt_nbi <- c(ctrl_X_dt,
-                   if (sum(!is.na(panel_sim[["pct_nbi"]])) >= 1000) "pct_nbi")
-panel_rf_Xdt_nbi <- panel_sim %>% filter(if_all(all_of(ctrl_X_dt_nbi), ~ !is.na(.)))
-cat("Muestra X_dt+NBI:", nrow(panel_rf_Xdt_nbi), "obs\n")
+cat("\nctrl_X_5 [MAIN]:", paste(ctrl_X_5, collapse = ", "), "\n")
+cat("ctrl_X_6 +mig:  ", paste(ctrl_X_6, collapse = ", "), "\n")
+cat("ctrl_X_7 +NBI:  ", paste(ctrl_X_7, collapse = ", "), "\n")
 
-ctrl_str_nbi <- paste(ctrl_X_dt_nbi, collapse = " + ")
-fml_rf_nbi <- function(y) as.formula(
-  paste(y, "~ log_canon_sim_l1 +", ctrl_str_nbi, "| ubigeo6 + year"))
-fml_iv_nbi <- function(y) as.formula(
-  paste(y, "~", ctrl_str_nbi, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1"))
+# Submuestras (filtrando non-NA de todos los controles)
+panel_iv_5   <- panel_sim    %>% filter(if_all(all_of(ctrl_X_5), ~ !is.na(.)))
+panel_iv_6   <- panel_sim    %>% filter(if_all(all_of(ctrl_X_6), ~ !is.na(.)))
+panel_iv_7   <- panel_sim    %>% filter(if_all(all_of(ctrl_X_7), ~ !is.na(.)))
+panel_iv_5h  <- panel_sim_5h %>% filter(if_all(all_of(ctrl_X_5), ~ !is.na(.)))  # umbral 5 hog
+panel_iv_Xdt <- panel_iv_5   # backward-compat
 
-m_rf_nbi_ingreso <- feols(fml_rf_nbi("log_ingreso_r"), data = panel_rf_Xdt_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_rf_nbi_gasto   <- feols(fml_rf_nbi("log_gasto_r"),   data = panel_rf_Xdt_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_rf_nbi_pobre   <- feols(fml_rf_nbi("pct_pobre"),     data = panel_rf_Xdt_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
+cat(sprintf("\nMuestra 5-ctrl [MAIN]  (≥10 hog): %d obs | %d distritos\n",
+            nrow(panel_iv_5),  n_distinct(panel_iv_5$ubigeo6)))
+cat(sprintf("Muestra 5-ctrl         (≥5  hog): %d obs | %d distritos\n",
+            nrow(panel_iv_5h), n_distinct(panel_iv_5h$ubigeo6)))
+cat(sprintf("Muestra 6-ctrl +imp             : %d obs | %d distritos\n",
+            nrow(panel_iv_6),  n_distinct(panel_iv_6$ubigeo6)))
+cat(sprintf("Muestra 7-ctrl +NBI             : %d obs | %d distritos\n",
+            nrow(panel_iv_7),  n_distinct(panel_iv_7$ubigeo6)))
 
-# ---- 10.D Tabla comparativa de forma reducida ------------------------------
-etable(m_rf_ingreso, m_rf_Xdt_ingreso, m_rf_nbi_ingreso,
-       m_rf_gasto,   m_rf_Xdt_gasto,   m_rf_nbi_gasto,
-       m_rf_pobre,   m_rf_Xdt_pobre,   m_rf_nbi_pobre,
+# Helpers de fórmulas
+fml_iv <- function(y, cstr = ctrl_str) as.formula(paste(
+  y, "~", cstr, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1"))
+fml_rf <- function(y, cstr = ctrl_str) as.formula(paste(
+  y, "~ log_canon_sim_l1 +", cstr, "| ubigeo6 + year"))
+fml_Xdt_iv <- function(y) fml_iv(y, ctrl_str)   # backward-compat
+
+iv_run <- function(y, data, cstr = ctrl_str, cl = ~ ubigeo6 + cod_provincia)
+  feols(fml_iv(y, cstr), data = data, cluster = cl)
+
+# ---- 10.C Primera etapa por submuestra  ------------------------------------
+cat("\n--- Primera etapa por submuestra (Wald ≥ 10 requerido) ---\n")
+fs_5  <- feols(log_canon_r ~ log_canon_sim_l1 | ubigeo6 + year,
+               data = panel_iv_5,  cluster = ~ ubigeo6 + cod_provincia)
+fs_6  <- feols(log_canon_r ~ log_canon_sim_l1 | ubigeo6 + year,
+               data = panel_iv_6,  cluster = ~ ubigeo6 + cod_provincia)
+fs_7  <- feols(log_canon_r ~ log_canon_sim_l1 | ubigeo6 + year,
+               data = panel_iv_7,  cluster = ~ ubigeo6 + cod_provincia)
+fs_5h <- feols(log_canon_r ~ log_canon_sim_l1 | ubigeo6 + year,
+               data = panel_iv_5h, cluster = ~ ubigeo6 + cod_provincia)
+
+etable(fs_sim_l1, fs_5, fs_6, fs_7, fs_5h,
+       headers = c("Full (sin ctrl)", "5-ctrl", "6-ctrl+imp", "7-ctrl+NBI", "5-ctrl (≥5h)"),
+       fitstat = ~ r2 + n + ivwald,
+       title   = "Primera etapa por submuestra — Wald ≥10 confirma instrumento válido")
+
+# ---- 10.D Forma reducida comparativa ---------------------------------------
+m_rf_ingreso  <- feols(log_ingreso_r ~ log_canon_sim_l1 | ubigeo6 + year,
+                       data = panel_sim,  cluster = ~ ubigeo6 + cod_provincia)
+m_rf_gasto    <- feols(log_gasto_r   ~ log_canon_sim_l1 | ubigeo6 + year,
+                       data = panel_sim,  cluster = ~ ubigeo6 + cod_provincia)
+m_rf_pobre    <- feols(pct_pobre     ~ log_canon_sim_l1 | ubigeo6 + year,
+                       data = panel_sim,  cluster = ~ ubigeo6 + cod_provincia)
+m_rf5_ingreso <- feols(fml_rf("log_ingreso_r", str5), data = panel_iv_5,
+                       cluster = ~ ubigeo6 + cod_provincia)
+m_rf5_gasto   <- feols(fml_rf("log_gasto_r",   str5), data = panel_iv_5,
+                       cluster = ~ ubigeo6 + cod_provincia)
+m_rf5_pobre   <- feols(fml_rf("pct_pobre",     str5), data = panel_iv_5,
+                       cluster = ~ ubigeo6 + cod_provincia)
+m_rf6_ingreso <- feols(fml_rf("log_ingreso_r", str6), data = panel_iv_6,
+                       cluster = ~ ubigeo6 + cod_provincia)
+m_rf6_gasto   <- feols(fml_rf("log_gasto_r",   str6), data = panel_iv_6,
+                       cluster = ~ ubigeo6 + cod_provincia)
+m_rf6_pobre   <- feols(fml_rf("pct_pobre",     str6), data = panel_iv_6,
+                       cluster = ~ ubigeo6 + cod_provincia)
+
+etable(m_rf_ingreso, m_rf5_ingreso, m_rf6_ingreso,
+       m_rf_gasto,   m_rf5_gasto,   m_rf6_gasto,
+       m_rf_pobre,   m_rf5_pobre,   m_rf6_pobre,
        se.below = TRUE,
        keep     = "log_canon_sim_l1",
-       headers  = c("Ing sin", "Ing X_dt", "Ing +NBI",
-                    "Gas sin", "Gas X_dt", "Gas +NBI",
-                    "Pob sin", "Pob X_dt", "Pob +NBI"),
+       headers  = c("Ing 0ctrl", "Ing 5ctrl", "Ing 6ctrl",
+                    "Gas 0ctrl", "Gas 5ctrl", "Gas 6ctrl",
+                    "Pob 0ctrl", "Pob 5ctrl", "Pob 6ctrl"),
        fitstat  = ~ r2 + n,
-       title    = "Forma reducida — Estabilidad ante controles X_dt y NBI")
+       title    = "Forma reducida — Estabilidad del instrumento ante controles")
 
 # ==============================================================================
-# ---- 11. RESULTADOS PRINCIPALES (IV con Canon simulado L1) ------------------
+# ---- 11. RESULTADOS PRINCIPALES (2SLS-IV Canon simulado L1) -----------------
 # ==============================================================================
 
-# ---- 11.A Sin controles ----------------------------------------------------
-m_iv_ingreso <- feols(log_ingreso_r ~ 1 | ubigeo6 + year |
-                        log_canon_r ~ log_canon_sim_l1,
-                      data = panel_sim, cluster = ~ ubigeo6 + cod_provincia)
-m_iv_gasto   <- feols(log_gasto_r ~ 1 | ubigeo6 + year |
-                        log_canon_r ~ log_canon_sim_l1,
-                      data = panel_sim, cluster = ~ ubigeo6 + cod_provincia)
-m_iv_pobre   <- feols(pct_pobre ~ 1 | ubigeo6 + year |
-                        log_canon_r ~ log_canon_sim_l1,
-                      data = panel_sim, cluster = ~ ubigeo6 + cod_provincia)
+# ---- 11.A Sin controles (muestra completa) ----------------------------------
+m_iv_ingreso <- iv_run("log_ingreso_r", panel_sim, "1")
+m_iv_gasto   <- iv_run("log_gasto_r",   panel_sim, "1")
+m_iv_pobre   <- iv_run("pct_pobre",     panel_sim, "1")
 
-etable(m_iv_ingreso, m_iv_gasto, m_iv_pobre,
-       se.below = TRUE,
-       headers  = c("log Ingreso", "log Gasto", "% Pobre"),
-       fitstat  = ~ r2 + n + ivf1 + ivwald,
-       title    = "Main Results — 2SLS IV Canon Simulado L1 (sin controles)")
+# ---- 11.B + Hogar y población (muestra completa) ----------------------------
+ctrl_h     <- intersect(ctrl_X_5, c("tam_hogar_mean", "log_pop_proxy"))
+str_h      <- paste(ctrl_h, collapse = " + ")
+panel_iv_h <- panel_sim %>% filter(if_all(all_of(ctrl_h), ~ !is.na(.)))
+m_iv_h_ingreso <- iv_run("log_ingreso_r", panel_iv_h, str_h)
+m_iv_h_gasto   <- iv_run("log_gasto_r",   panel_iv_h, str_h)
+m_iv_h_pobre   <- iv_run("pct_pobre",     panel_iv_h, str_h)
 
-# ---- 11.B Con composición del hogar y población ----------------------------
-# tam_hogar_mean y log_pop_proxy siempre tienen cobertura completa → sin riesgo.
-ctrl_h <- intersect(ctrl_X_dt, c("tam_hogar_mean", "log_pop_proxy"))
-if (length(ctrl_h) > 0) {
-  panel_iv_h <- panel_sim %>% filter(if_all(all_of(ctrl_h), ~ !is.na(.)))
-  ctrl_h_str <- paste(ctrl_h, collapse = " + ")
-  fml_h_iv   <- function(y) as.formula(
-    paste(y, "~", ctrl_h_str,
-          "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1"))
-  m_iv_h_ingreso <- feols(fml_h_iv("log_ingreso_r"), data = panel_iv_h,
-                          cluster = ~ ubigeo6 + cod_provincia)
-  m_iv_h_gasto   <- feols(fml_h_iv("log_gasto_r"),   data = panel_iv_h,
-                          cluster = ~ ubigeo6 + cod_provincia)
-  m_iv_h_pobre   <- feols(fml_h_iv("pct_pobre"),     data = panel_iv_h,
-                          cluster = ~ ubigeo6 + cod_provincia)
-} else {
-  panel_iv_h     <- panel_sim
-  m_iv_h_ingreso <- m_iv_ingreso
-  m_iv_h_gasto   <- m_iv_gasto
-  m_iv_h_pobre   <- m_iv_pobre
-}
+# ---- 11.C *** ESPECIFICACIÓN PRINCIPAL *** 5 ctrl, muestra completa ---------
+# Wald ≈ 25, N ≈ 8 368 → identificación fuerte y limpia
+m_iv_5_ingreso <- iv_run("log_ingreso_r", panel_iv_5, str5)
+m_iv_5_gasto   <- iv_run("log_gasto_r",   panel_iv_5, str5)
+m_iv_5_pobre   <- iv_run("pct_pobre",     panel_iv_5, str5)
 
-# ---- 11.C + Migración y empleo minero --------------------------------------
-# Usa sólo los controles que sobrevivieron ctrl_X_dt (excluye pct_migrante si vacío)
-ctrl_mig <- intersect(ctrl_X_dt,
-                      c("tam_hogar_mean", "log_pop_proxy",
-                        "pct_migrante", "pct_emp_minero"))
-if (length(ctrl_mig) > 0) {
-  panel_iv_mig <- panel_sim %>% filter(if_all(all_of(ctrl_mig), ~ !is.na(.)))
-  ctrl_mig_str <- paste(ctrl_mig, collapse = " + ")
-  fml_mig_iv   <- function(y) as.formula(
-    paste(y, "~", ctrl_mig_str,
-          "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1"))
-  m_iv_mig_ingreso <- feols(fml_mig_iv("log_ingreso_r"), data = panel_iv_mig,
-                            cluster = ~ ubigeo6 + cod_provincia)
-  m_iv_mig_gasto   <- feols(fml_mig_iv("log_gasto_r"),   data = panel_iv_mig,
-                            cluster = ~ ubigeo6 + cod_provincia)
-  m_iv_mig_pobre   <- feols(fml_mig_iv("pct_pobre"),     data = panel_iv_mig,
-                            cluster = ~ ubigeo6 + cod_provincia)
-} else {
-  panel_iv_mig     <- panel_iv_h
-  m_iv_mig_ingreso <- m_iv_h_ingreso
-  m_iv_mig_gasto   <- m_iv_h_gasto
-  m_iv_mig_pobre   <- m_iv_h_pobre
-}
+# ---- 11.D + Migración imputada (robustez) -----------------------------------
+m_iv_6_ingreso <- iv_run("log_ingreso_r", panel_iv_6, str6)
+m_iv_6_gasto   <- iv_run("log_gasto_r",   panel_iv_6, str6)
+m_iv_6_pobre   <- iv_run("pct_pobre",     panel_iv_6, str6)
 
-# ---- 11.D Vector X_dt completo ---------------------------------------------
-panel_iv_Xdt     <- panel_sim %>% filter(if_all(all_of(ctrl_X_dt), ~ !is.na(.)))
-m_iv_Xdt_ingreso <- feols(fml_iv("log_ingreso_r"), data = panel_iv_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_iv_Xdt_gasto   <- feols(fml_iv("log_gasto_r"),   data = panel_iv_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_iv_Xdt_pobre   <- feols(fml_iv("pct_pobre"),     data = panel_iv_Xdt,
-                          cluster = ~ ubigeo6 + cod_provincia)
+# ---- 11.E + NBI (especificación más rica) -----------------------------------
+m_iv_7_ingreso <- iv_run("log_ingreso_r", panel_iv_7, str7)
+m_iv_7_gasto   <- iv_run("log_gasto_r",   panel_iv_7, str7)
+m_iv_7_pobre   <- iv_run("pct_pobre",     panel_iv_7, str7)
 
-# ---- 11.E X_dt completo + NBI ----------------------------------------------
-panel_iv_nbi     <- panel_sim %>% filter(if_all(all_of(ctrl_X_dt_nbi), ~ !is.na(.)))
-m_iv_nbi_ingreso <- feols(fml_iv_nbi("log_ingreso_r"), data = panel_iv_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_iv_nbi_gasto   <- feols(fml_iv_nbi("log_gasto_r"),   data = panel_iv_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
-m_iv_nbi_pobre   <- feols(fml_iv_nbi("pct_pobre"),     data = panel_iv_nbi,
-                          cluster = ~ ubigeo6 + cod_provincia)
-
-# ---- 11.F Tabla de estabilidad — coeficiente del canon a través de specs ---
+# ---- 11.F Tabla de estabilidad β_IV (columna 3 = MAIN) ---------------------
 cat("\nTamaños de muestra por especificación:\n",
-    "  Sin ctrl (panel_sim):    ", nrow(panel_sim),    "\n",
-    "  + Hogar/Pob:             ", nrow(panel_iv_h),   "\n",
-    "  + Migrac/Min:            ", nrow(panel_iv_mig), "\n",
-    "  X_dt completo:           ", nrow(panel_iv_Xdt), "\n",
-    "  X_dt + NBI:              ", nrow(panel_iv_nbi), "\n")
+    "  Sin ctrl:           ", nrow(panel_sim),    "\n",
+    "  + Hogar/Pob:        ", nrow(panel_iv_h),   "\n",
+    "  5 ctrl [MAIN]:      ", nrow(panel_iv_5),   "\n",
+    "  6 ctrl +imp:        ", nrow(panel_iv_6),   "\n",
+    "  7 ctrl +NBI:        ", nrow(panel_iv_7),   "\n")
 
-etable(m_iv_ingreso, m_iv_h_ingreso, m_iv_mig_ingreso,
-       m_iv_Xdt_ingreso, m_iv_nbi_ingreso,
-       se.below = TRUE,
-       keep_raw = "fit_log_canon_r",
-       headers  = c("Sin ctrl", "+ Hogar/Pob", "+ Migrac/Min",
-                    "X_dt", "X_dt + NBI"),
+etable(m_iv_ingreso, m_iv_h_ingreso, m_iv_5_ingreso,
+       m_iv_6_ingreso, m_iv_7_ingreso,
+       se.below = TRUE, keep_raw = "fit_log_canon_r",
+       headers  = c("Sin ctrl", "+Hogar/Pob", "5ctrl [MAIN]",
+                    "+mig_imp", "+NBI"),
        fitstat  = ~ r2 + n + ivf1 + ivwald,
-       title    = "Estabilidad del β_IV — log Ingreso")
+       title    = "Estabilidad β_IV — log Ingreso per cápita")
 
-etable(m_iv_gasto, m_iv_h_gasto, m_iv_mig_gasto,
-       m_iv_Xdt_gasto, m_iv_nbi_gasto,
-       se.below = TRUE,
-       keep_raw = "fit_log_canon_r",
-       headers  = c("Sin ctrl", "+ Hogar/Pob", "+ Migrac/Min",
-                    "X_dt", "X_dt + NBI"),
+etable(m_iv_gasto, m_iv_h_gasto, m_iv_5_gasto,
+       m_iv_6_gasto, m_iv_7_gasto,
+       se.below = TRUE, keep_raw = "fit_log_canon_r",
+       headers  = c("Sin ctrl", "+Hogar/Pob", "5ctrl [MAIN]",
+                    "+mig_imp", "+NBI"),
        fitstat  = ~ r2 + n + ivf1 + ivwald,
-       title    = "Estabilidad del β_IV — log Gasto")
+       title    = "Estabilidad β_IV — log Gasto per cápita")
 
-etable(m_iv_pobre, m_iv_h_pobre, m_iv_mig_pobre,
-       m_iv_Xdt_pobre, m_iv_nbi_pobre,
-       se.below = TRUE,
-       keep_raw = "fit_log_canon_r",
-       headers  = c("Sin ctrl", "+ Hogar/Pob", "+ Migrac/Min",
-                    "X_dt", "X_dt + NBI"),
+etable(m_iv_pobre, m_iv_h_pobre, m_iv_5_pobre,
+       m_iv_6_pobre, m_iv_7_pobre,
+       se.below = TRUE, keep_raw = "fit_log_canon_r",
+       headers  = c("Sin ctrl", "+Hogar/Pob", "5ctrl [MAIN]",
+                    "+mig_imp", "+NBI"),
        fitstat  = ~ r2 + n + ivf1 + ivwald,
-       title    = "Estabilidad del β_IV — % Pobre")
+       title    = "Estabilidad β_IV — Tasa de pobreza")
 
-# ---- 11.G Resultados completos con X_dt + NBI (especificación más rica) ----
-etable(m_iv_nbi_ingreso, m_iv_nbi_gasto, m_iv_nbi_pobre,
+# ---- 11.G Resultados completos (especificación más rica) --------------------
+etable(m_iv_7_ingreso, m_iv_7_gasto, m_iv_7_pobre,
        se.below = TRUE,
        headers  = c("log Ingreso", "log Gasto", "% Pobre"),
        fitstat  = ~ r2 + n + ivf1 + ivwald,
-       title    = "Resultados principales — IV con X_dt + NBI")
+       title    = "Resultados principales — 2SLS IV con 7 controles (X_dt + NBI)")
+
+# ---- 11.H Heterogeneidad por tipo de receptor --------------------------------
+# Los distritos se clasifican en tres grupos según la Ley 27506:
+#   "directo"  = tiene actividad minera de Concentración propia (10%)
+#   "provincia" = en misma provincia que un minero directo, sin mina propia (25%)
+#   "region"   = en misma región, sin minería provincial (40%)
+# Estimamos el modelo IV por separado en cada subgrupo. No se puede incluir la
+# interacción de la variable endógena directamente en feols.
+
+tipos_het <- c("directo", "provincia", "region")
+
+m_het_ing <- lapply(setNames(tipos_het, tipos_het), function(tipo) {
+  dat <- panel_iv_5 %>%
+    left_join(clasificacion_canon %>% select(ubigeo6, tipo_receptor), by = "ubigeo6") %>%
+    filter(tipo_receptor == tipo)
+  cat(sprintf("  [ing] %s: %d obs, %d distritos\n",
+              tipo, nrow(dat), n_distinct(dat$ubigeo6)))
+  feols(fml_iv("log_ingreso_r"), data = dat, cluster = ~ ubigeo6 + cod_provincia)
+})
+
+m_het_gas <- lapply(setNames(tipos_het, tipos_het), function(tipo) {
+  dat <- panel_iv_5 %>%
+    left_join(clasificacion_canon %>% select(ubigeo6, tipo_receptor), by = "ubigeo6") %>%
+    filter(tipo_receptor == tipo)
+  feols(fml_iv("log_gasto_r"), data = dat, cluster = ~ ubigeo6 + cod_provincia)
+})
+
+m_het_pob <- lapply(setNames(tipos_het, tipos_het), function(tipo) {
+  dat <- panel_iv_5 %>%
+    left_join(clasificacion_canon %>% select(ubigeo6, tipo_receptor), by = "ubigeo6") %>%
+    filter(tipo_receptor == tipo)
+  feols(fml_iv("pct_pobre"), data = dat, cluster = ~ ubigeo6 + cod_provincia)
+})
+
+do.call(etable, c(
+  list(m_iv_5_ingreso), m_het_ing,
+  list(keep_raw = "fit_log_canon_r", se.below = TRUE,
+       headers  = c("Todos", "Directo", "Provincia", "Región"),
+       fitstat  = ~ n + ivwald,
+       title    = "Heterogeneidad por tipo de receptor — log Ingreso per cápita")
+))
+
+do.call(etable, c(
+  list(m_iv_5_gasto), m_het_gas,
+  list(keep_raw = "fit_log_canon_r", se.below = TRUE,
+       headers  = c("Todos", "Directo", "Provincia", "Región"),
+       fitstat  = ~ n + ivwald,
+       title    = "Heterogeneidad por tipo de receptor — log Gasto per cápita")
+))
+
+do.call(etable, c(
+  list(m_iv_5_pobre), m_het_pob,
+  list(keep_raw = "fit_log_canon_r", se.below = TRUE,
+       headers  = c("Todos", "Directo", "Provincia", "Región"),
+       fitstat  = ~ n + ivwald,
+       title    = "Heterogeneidad por tipo de receptor — Tasa de pobreza no extrema")
+))
 
 
 # ==============================================================================
@@ -1522,25 +1653,135 @@ left_join(
   count(tipo_full, tipo_pre) %>%
   filter(tipo_full != tipo_pre)
 
+# ---- 12.I Umbral de confiabilidad ENAHO: 5 hogares vs 10 -------------------
+# El umbral n_hogares >= 10 descarta el 49% de las obs con instrumento válido
+# (7,912 de 15,386 pasan el filtro). Si bajar a 5 no cambia los coeficientes,
+# la restricción de calidad no sesga la estimación principal.
+m_iv_5h_ingreso <- feols(fml_iv("log_ingreso_r"), data = panel_iv_5h,
+                         cluster = ~ ubigeo6 + cod_provincia)
+m_iv_5h_gasto   <- feols(fml_iv("log_gasto_r"),   data = panel_iv_5h,
+                         cluster = ~ ubigeo6 + cod_provincia)
+m_iv_5h_pobre   <- feols(fml_iv("pct_pobre"),     data = panel_iv_5h,
+                         cluster = ~ ubigeo6 + cod_provincia)
+
+etable(m_iv_5_ingreso, m_iv_5h_ingreso,
+       m_iv_5_gasto,   m_iv_5h_gasto,
+       m_iv_5_pobre,   m_iv_5h_pobre,
+       keep_raw = "fit_log_canon_r",
+       headers  = c("≥10 hog.", "≥5 hog.", "≥10 hog.", "≥5 hog.", "≥10 hog.", "≥5 hog."),
+       fitstat  = ~ n + ivwald,
+       title    = "Robustez 12.I — Umbral de confiabilidad ENAHO (5 vs 10 hogares)")
+
+# ---- 12.J Solo distritos con variación positiva en instrumento --------------
+# Los 254 distritos clasificados como no_receptor tienen log_canon_sim = 0
+# siempre (sd = 0). No aportan variación al instrumento pero sí ruido al outcome.
+# Si el resultado no cambia al excluirlos, el instrumento no está diluidando.
+distritos_con_variacion <- canon_simulado %>%
+  group_by(ubigeo6) %>%
+  summarise(sd_sim = sd(log_canon_sim_l1, na.rm = TRUE), .groups = "drop") %>%
+  filter(!is.na(sd_sim) & sd_sim > 0) %>%
+  pull(ubigeo6)
+
+panel_iv_ident <- panel_iv_5 %>%
+  filter(ubigeo6 %in% distritos_con_variacion)
+
+cat(sprintf("  panel_iv_5:      %d obs | %d distritos\n",
+            nrow(panel_iv_5),    n_distinct(panel_iv_5$ubigeo6)))
+cat(sprintf("  panel_iv_ident:  %d obs | %d distritos (sd_sim > 0)\n",
+            nrow(panel_iv_ident), n_distinct(panel_iv_ident$ubigeo6)))
+
+m_iv_ident_ingreso <- feols(fml_iv("log_ingreso_r"), data = panel_iv_ident,
+                            cluster = ~ ubigeo6 + cod_provincia)
+m_iv_ident_gasto   <- feols(fml_iv("log_gasto_r"),   data = panel_iv_ident,
+                            cluster = ~ ubigeo6 + cod_provincia)
+m_iv_ident_pobre   <- feols(fml_iv("pct_pobre"),     data = panel_iv_ident,
+                            cluster = ~ ubigeo6 + cod_provincia)
+
+etable(m_iv_5_ingreso, m_iv_ident_ingreso,
+       m_iv_5_gasto,   m_iv_ident_gasto,
+       m_iv_5_pobre,   m_iv_ident_pobre,
+       keep_raw = "fit_log_canon_r",
+       headers  = c("Full", "Sd>0", "Full", "Sd>0", "Full", "Sd>0"),
+       fitstat  = ~ n + ivwald,
+       title    = "Robustez 12.J — Restricción a distritos con variación positiva en instrumento")
+
+# ---- 12.K Sensibilidad al nivel de clustering ------------------------------
+# Estándar 2-way (ubigeo6 + cod_provincia): más conservador, captura correlación
+# intra-provincia en el error. Con solo 196 clusters provinciales y districts
+# anidados en provincias, el clustering biclavijo es la mejor opción dado que
+# la fórmula del canon opera a nivel provincial (Ley 27506, Art. 5).
+# 1-way (ubigeo6): estándar alternativo en panel data con FE de alta dimensión.
+m_iv_cl1_ingreso    <- feols(fml_iv("log_ingreso_r"), data = panel_iv_5, cluster = ~ ubigeo6)
+m_iv_cl1_gasto      <- feols(fml_iv("log_gasto_r"),   data = panel_iv_5, cluster = ~ ubigeo6)
+m_iv_cl1_pobre      <- feols(fml_iv("pct_pobre"),     data = panel_iv_5, cluster = ~ ubigeo6)
+m_iv_clprov_ingreso <- feols(fml_iv("log_ingreso_r"), data = panel_iv_5, cluster = ~ cod_provincia)
+m_iv_clprov_gasto   <- feols(fml_iv("log_gasto_r"),   data = panel_iv_5, cluster = ~ cod_provincia)
+m_iv_clprov_pobre   <- feols(fml_iv("pct_pobre"),     data = panel_iv_5, cluster = ~ cod_provincia)
+
+etable(m_iv_5_ingreso, m_iv_cl1_ingreso, m_iv_clprov_ingreso,
+       m_iv_5_gasto,   m_iv_cl1_gasto,   m_iv_clprov_gasto,
+       m_iv_5_pobre,   m_iv_cl1_pobre,   m_iv_clprov_pobre,
+       keep_raw = "fit_log_canon_r",
+       headers  = c("2-way", "1-way ubi", "1-way prov",
+                    "2-way", "1-way ubi", "1-way prov",
+                    "2-way", "1-way ubi", "1-way prov"),
+       fitstat  = ~ n + ivwald,
+       title    = "Robustez 12.K — Sensibilidad al nivel de clustering")
+
+# ---- 12.L Winsorización al 1% de outcomes (control de outliers) -----------
+# Los outcomes ENAHO pueden tener valores extremos en distritos con muy pocos
+# hogares muestreados. Winsorizar al 1% simétrico verifica que los resultados
+# no dependan de observaciones atípicas.
+panel_w <- panel_iv_5 %>%
+  mutate(
+    log_ingreso_w = winsor(log_ingreso_r, 0.01),
+    log_gasto_w   = winsor(log_gasto_r,   0.01),
+    pct_pobre_w   = winsor(pct_pobre,     0.01)
+  )
+
+m_iv_w_ingreso <- feols(
+  as.formula(paste("log_ingreso_w ~", ctrl_str, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1")),
+  data = panel_w, cluster = ~ ubigeo6 + cod_provincia)
+m_iv_w_gasto <- feols(
+  as.formula(paste("log_gasto_w ~",   ctrl_str, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1")),
+  data = panel_w, cluster = ~ ubigeo6 + cod_provincia)
+m_iv_w_pobre <- feols(
+  as.formula(paste("pct_pobre_w ~",   ctrl_str, "| ubigeo6 + year | log_canon_r ~ log_canon_sim_l1")),
+  data = panel_w, cluster = ~ ubigeo6 + cod_provincia)
+
+etable(m_iv_5_ingreso, m_iv_w_ingreso,
+       m_iv_5_gasto,   m_iv_w_gasto,
+       m_iv_5_pobre,   m_iv_w_pobre,
+       keep_raw = "fit_log_canon_r",
+       headers  = c("Raw", "Winsor 1%", "Raw", "Winsor 1%", "Raw", "Winsor 1%"),
+       fitstat  = ~ n + ivwald,
+       title    = "Robustez 12.L — Winsorización 1% de outcomes (control de outliers)")
+
 # ---- Tablas comparativas ---------------------------------------------------
-etable(m_iv_Xdt_ingreso, m_iv_indir_ingreso, m_iv_ctrl_ingreso,
+# Baseline = especificación 5-ctrl (11.D). Todas las robustez usan los mismos
+# controles para que el cambio en β refleje la restricción de muestra/clustering,
+# no diferencias en controles.
+etable(m_iv_5_ingreso, m_iv_indir_ingreso, m_iv_ctrl_ingreso,
        m_iv_reg_ingreso, m_iv_l2_ingreso, m_iv_sintop_ingreso,
-       headers  = c("Main (X_dt)", "Indirect", "Mining ctrl",
-                    "Region cl.", "Lag L2", "Sin top 3"),
+       keep_raw = "fit_log_canon_r",
+       headers  = c("Main (5 ctrl)", "Indirect", "Mining ctrl",
+                    "Region cl.", "Lag L2", "Sin top 3 reg."),
        fitstat  = ~ n + ivwald,
        title    = "Robustness — Income Equation")
 
-etable(m_iv_Xdt_gasto, m_iv_indir_gasto, m_iv_ctrl_gasto,
+etable(m_iv_5_gasto, m_iv_indir_gasto, m_iv_ctrl_gasto,
        m_iv_reg_gasto, m_iv_l2_gasto, m_iv_sintop_gasto,
-       headers  = c("Main (X_dt)", "Indirect", "Mining ctrl",
-                    "Region cl.", "Lag L2", "Sin top 3"),
+       keep_raw = "fit_log_canon_r",
+       headers  = c("Main (5 ctrl)", "Indirect", "Mining ctrl",
+                    "Region cl.", "Lag L2", "Sin top 3 reg."),
        fitstat  = ~ n + ivwald,
        title    = "Robustness — Expenditure Equation")
 
-etable(m_iv_Xdt_pobre, m_iv_indir_pobre, m_iv_ctrl_pobre,
+etable(m_iv_5_pobre, m_iv_indir_pobre, m_iv_ctrl_pobre,
        m_iv_reg_pobre, m_iv_l2_pobre, m_iv_sintop_pobre,
-       headers  = c("Main (X_dt)", "Indirect", "Mining ctrl",
-                    "Region cl.", "Lag L2", "Sin top 3"),
+       keep_raw = "fit_log_canon_r",
+       headers  = c("Main (5 ctrl)", "Indirect", "Mining ctrl",
+                    "Region cl.", "Lag L2", "Sin top 3 reg."),
        fitstat  = ~ n + ivwald,
        title    = "Robustness — Poverty Equation")
 
@@ -1564,26 +1805,35 @@ saveRDS(canon_simulado,  "./Data/canon_simulado.rds")
 saveRDS(panel_sim,       "./Data/panel_sim.rds")
 saveRDS(
   list(
-    main_noct = list(ingreso = m_iv_ingreso,       gasto = m_iv_gasto,       pobre = m_iv_pobre),
-    main_Xdt  = list(ingreso = m_iv_Xdt_ingreso,   gasto = m_iv_Xdt_gasto,   pobre = m_iv_Xdt_pobre),
-    main_nbi  = list(ingreso = m_iv_nbi_ingreso,   gasto = m_iv_nbi_gasto,   pobre = m_iv_nbi_pobre),
-    indirect  = list(ingreso = m_iv_indir_ingreso, gasto = m_iv_indir_gasto, pobre = m_iv_indir_pobre),
-    mining_ct = list(ingreso = m_iv_ctrl_ingreso,  gasto = m_iv_ctrl_gasto,  pobre = m_iv_ctrl_pobre),
-    region_cl = list(ingreso = m_iv_reg_ingreso,   gasto = m_iv_reg_gasto,   pobre = m_iv_reg_pobre),
-    lag_l2    = list(ingreso = m_iv_l2_ingreso,    gasto = m_iv_l2_gasto,    pobre = m_iv_l2_pobre),
-    sin_top   = list(ingreso = m_iv_sintop_ingreso,gasto = m_iv_sintop_gasto,pobre = m_iv_sintop_pobre),
-    alt_out   = list(ingbru  = m_alt_ingbru,       gini  = m_alt_gini),
-    placebo   = list(ingreso = m_placebo_ingreso,  gasto = m_placebo_gasto,  pobre = m_placebo_pobre)
+    main_noct  = list(ingreso = m_iv_ingreso,       gasto = m_iv_gasto,       pobre = m_iv_pobre),
+    main_5     = list(ingreso = m_iv_5_ingreso,     gasto = m_iv_5_gasto,     pobre = m_iv_5_pobre),
+    main_6     = list(ingreso = m_iv_6_ingreso,     gasto = m_iv_6_gasto,     pobre = m_iv_6_pobre),
+    main_7     = list(ingreso = m_iv_7_ingreso,     gasto = m_iv_7_gasto,     pobre = m_iv_7_pobre),
+    umbral_5h  = list(ingreso = m_iv_5h_ingreso,    gasto = m_iv_5h_gasto,    pobre = m_iv_5h_pobre),
+    indirect   = list(ingreso = m_iv_indir_ingreso, gasto = m_iv_indir_gasto, pobre = m_iv_indir_pobre),
+    mining_ct  = list(ingreso = m_iv_ctrl_ingreso,  gasto = m_iv_ctrl_gasto,  pobre = m_iv_ctrl_pobre),
+    region_cl  = list(ingreso = m_iv_reg_ingreso,   gasto = m_iv_reg_gasto,   pobre = m_iv_reg_pobre),
+    lag_l2     = list(ingreso = m_iv_l2_ingreso,    gasto = m_iv_l2_gasto,    pobre = m_iv_l2_pobre),
+    sin_top    = list(ingreso = m_iv_sintop_ingreso, gasto = m_iv_sintop_gasto, pobre = m_iv_sintop_pobre),
+    ident      = list(ingreso = m_iv_ident_ingreso, gasto = m_iv_ident_gasto, pobre = m_iv_ident_pobre),
+    alt_out    = list(ingbru  = m_alt_ingbru,        gini  = m_alt_gini),
+    placebo    = list(ingreso = m_placebo_ingreso,   gasto = m_placebo_gasto,  pobre = m_placebo_pobre),
+    het_ing    = m_het_ing,
+    het_gas    = m_het_gas,
+    het_pob    = m_het_pob
   ),
   "./Data/results_iv.rds"
 )
 
 cat("\n=== Pipeline completo ===\n")
-cat("Panel:", nrow(Panel), "filas\n")
-cat("Muestra IV (L1):", nrow(panel_sim), "filas |",
-    n_distinct(panel_sim$ubigeo6), "distritos\n")
-cat("Muestra IV (L2):", nrow(panel_sim_l2), "filas\n")
-cat("Muestra sin top-3 mineras:", nrow(panel_sin_top), "filas\n")
+cat(sprintf("Panel:                    %d filas | %d distritos\n",
+            nrow(Panel), n_distinct(Panel$ubigeo6)))
+cat(sprintf("Muestra IV 5-ctrl ≥10h:  %d obs | %d distritos\n",
+            nrow(panel_iv_5),  n_distinct(panel_iv_5$ubigeo6)))
+cat(sprintf("Muestra IV 5-ctrl ≥5h:   %d obs | %d distritos\n",
+            nrow(panel_iv_5h), n_distinct(panel_iv_5h$ubigeo6)))
+cat(sprintf("Muestra IV L2:            %d obs\n", nrow(panel_sim_l2)))
+cat(sprintf("Muestra sin top-3:        %d obs\n", nrow(panel_sin_top)))
 
 
 # ==============================================================================
@@ -1670,38 +1920,52 @@ for (mod in c("ENAHO_100","ENAHO_200","ENAHO_300","ENAHO_500","ENAHO_sumaria")) 
 cat("\n================================================================\n")
 cat("15.2 ENAHO_200 migración — dtypes y filtros\n")
 cat("================================================================\n")
+
 cat("\nDtypes P20x:\n")
-mig_vars_check <- intersect(c("P204","P206","P207","P208A","P208A1","FACTOR07"), names(ENAHO_200))
+mig_vars_check <- intersect(c("P204","P206","P207","P208A","P208A1","FACTOR07"),
+                            names(ENAHO_200))
 for (v in mig_vars_check) {
   x <- ENAHO_200[[v]]
-  cat(sprintf("  %-10s : %-30s haven_labelled=%s\n", v, paste(class(x),collapse="/"),
-              inherits(x,"haven_labelled")))
+  cat(sprintf("  %-10s : %-30s haven_labelled=%s\n", v, paste(class(x), collapse="/"),
+              inherits(x, "haven_labelled")))
 }
 for (v in c("P204","P206","P208A1","P207","P208A")) qa_tab(ENAHO_200, v)
 
-cat("\n--- Conteo paso a paso ---\n")
+cat("\n--- Conteo paso a paso (usando hh_key) ---\n")
 mig_d <- ENAHO_200 %>%
-  mutate(ubigeo6=pad6(UBIGEO), year=as.integer(AÑO),
-         CONGLOME=as.integer(CONGLOME), VIVIENDA=as.integer(VIVIENDA),
-         HOGAR_int=as.integer(HOGAR))
+  mutate(
+    ubigeo6 = pad6(UBIGEO),
+    year    = as.integer(AÑO),
+    hh_key  = paste(as.integer(CONGLOME), as.integer(VIVIENDA),
+                    as.integer(HOGAR),    as.integer(AÑO), sep = "_")
+  )
 qa_line("N inicial", nrow(mig_d))
+
 mig_d <- mig_d %>% filter(ubigeo6 %in% Ubigeo_Master$ubigeo6)
 qa_line("tras ubigeo6 in master", nrow(mig_d))
-if (!"FACTOR07" %in% names(mig_d)) {
-  mig_d <- mig_d %>% left_join(hh_weights, by=c("CONGLOME","VIVIENDA","HOGAR_int","year"))
-  qa_line("tras join hh_weights", nrow(mig_d))
-}
+
+mig_d <- mig_d %>% left_join(hh_weights, by = "hh_key")
+qa_line("tras join hh_weights (hh_key)", nrow(mig_d))
+qa_line("  FACTOR07 no-NA", sum(!is.na(mig_d$FACTOR07)))
+
 mig_d <- mig_d %>% filter(!is.na(FACTOR07))
-qa_line("tras !is.na(FACTOR07)", nrow(mig_d))
-if ("P204" %in% names(mig_d)) {
-  qa_line("P204 raw==1 count", sum(unlab_qa(mig_d$P204)==1, na.rm=TRUE))
-  mig_d <- mig_d %>% filter(unlab_qa(P204) == 1)
-  qa_line("tras P204==1 (unlab)", nrow(mig_d))
+qa_line("tras filter FACTOR07", nrow(mig_d))
+
+if (has_p204) {
+  mig_d <- mig_d %>% filter(as.numeric(P204) == 1)
+  qa_line("tras P204==1", nrow(mig_d))
 }
-if ("P208A1" %in% names(mig_d)) {
-  qa_line("P208A1 no-NA",       sum(!is.na(unlab_qa(mig_d$P208A1))))
-  qa_line("P208A1==2 (migrant)",sum(unlab_qa(mig_d$P208A1)==2, na.rm=TRUE))
-}
+
+mig_d <- mig_d %>%
+  mutate(
+    migrante = if (has_p208a1) as.integer(as.numeric(P208A1) == 0) else NA_integer_
+  )
+qa_line("P208A1==0 (migrante) count", sum(mig_d$migrante == 1, na.rm = TRUE))
+qa_line("P208A1==1 (no-mig.) count",  sum(mig_d$migrante == 0, na.rm = TRUE))
+qa_line("migrante NA",                sum(is.na(mig_d$migrante)))
+
+cat("  pct_migrante esperada (media bruta):",
+    round(mean(mig_d$migrante, na.rm = TRUE), 3), "\n")
 
 # ---- 15.3 Mining_Site & Transferencias -------------------------------------
 cat("\n================================================================\n")
@@ -1830,16 +2094,26 @@ if (exists("panel_sim")) {
 
 # Output final
 if (length(issues) == 0) {
-  
   cat("  Ningún problema crítico detectado. [OK]\n")
-  
 } else {
-  
-  for (i in seq_along(issues)) {
-    cat(sprintf("  [%d] %s\n", i, issues[i]))
-  }
-  
+  for (i in seq_along(issues)) cat(sprintf("  [%d] %s\n", i, issues[i]))
 }
+
+
+# ---- QA: distribución de log_canon_r y log_canon_sim_l1 --------------------
+cat("\n=== Distribución de variables clave en panel_sim ===\n")
+
+for (v in c("log_canon_r", "log_canon_sim_l1")) {
+  x <- panel_sim[[v]]
+  cat(sprintf("\n%s:\n", v))
+  cat(sprintf("  Ceros exactos: %d (%.1f%%)\n",
+              sum(x == 0, na.rm=T), 100*mean(x == 0, na.rm=T)))
+  cat(sprintf("  Quantiles: Q10=%.2f  Q25=%.2f  Med=%.2f  Q75=%.2f  Q90=%.2f\n",
+              quantile(x, .1, na.rm=T), quantile(x, .25, na.rm=T),
+              quantile(x, .5, na.rm=T), quantile(x, .75, na.rm=T),
+              quantile(x, .9, na.rm=T)))
+}
+
 cat("\n================================================================\n")
 cat("QA completado.\n")
 cat("================================================================\n")
